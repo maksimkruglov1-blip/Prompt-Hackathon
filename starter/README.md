@@ -1,13 +1,8 @@
-# Optional Control Room starter
+# Control Room starter (+ hackathon slice)
 
-This is a small read-only starting point for the Car Delivery Control Room challenge. It uses Next.js with TypeScript, Postgres, Drizzle and Next.js API routes. The database comes from the fictional dataset in `../dataset/data`. No live Bahn system is connected.
+Bahn packet starter with a **Control Room** attention queue at `/` and one **on-the-road** agent. The lane board remains at `/lanes` as a reference view, not the primary UX.
 
-The lanes are one familiar view, not a proposed answer. Each card opens a separate order record. Teams can keep, change or replace the interface and data model.
-Every vehicle model in this dataset has a generated illustration on its record page. Orders with the same model share an image. An illustration is not evidence about the specific vehicle. Single-colour make marks are in `public/car-logos/` for teams that want them.
-
-## Start
-
-You need Node.js 24 or later and Docker.
+See the repo root `README.md` for the full runbook. Short version:
 
 ```sh
 cp .env.example .env
@@ -16,10 +11,36 @@ docker compose up -d --wait
 npm run db:push
 npm run db:seed
 npm run attachments:seed
-npm run dev
+npm run dev -- -p 43123 -H 127.0.0.1
 ```
 
-Open http://localhost:3000.
+Open http://127.0.0.1:43123.
+
+Optional LLM (OpenRouter or OpenAI — never commit keys). Copy from `.env.example`:
+
+```sh
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_MODEL=openai/gpt-4o-mini
+```
+
+Without `OPENAI_API_KEY`, the mock agent runs. Control room header shows **agent LLM** vs **agent mock**. See root `README.md` for the OpenRouter test steps.
+
+Participant additions:
+
+- `lib/agent/` — on-the-road tools, mock/LLM loop, control-room projections
+- `app/api/control-room`, `app/api/agent/on-the-road`
+- `agent_runs` table (no FK into seed data)
+- Demo seed for Bentley roadside case `ord-00322`
+
+---
+
+Original starter notes below. The dataset is fictional. No live Bahn system is connected.
+Every vehicle model in this dataset has a generated illustration on its record page. Orders with the same model share an image. An illustration is not evidence about the specific vehicle. Single-colour make marks are in `public/car-logos/` for teams that want them.
+
+## Start (starter defaults)
+
+You need Node.js 24 or later and Docker. Default port without `-p` is 3000.
 
 The Compose file uses three ports on this computer: 5438 for Postgres, 9009 and 9010 for the attachment store. If one of them is already in use, change it in `compose.yaml` and update `DATABASE_URL` or `S3_ENDPOINT` in `.env` to match.
 

@@ -128,3 +128,20 @@ export const relatedRecords = pgTable("related_records", {
   primaryKey({ columns: [table.collection, table.id] }),
   index("related_records_order_idx").on(table.orderId, table.collection),
 ])
+
+/** Participant table: on-the-road agent runs and human decisions. No FK to seed tables so reseeding stays safe. */
+export const agentRuns = pgTable("agent_runs", {
+  id: text("id").primaryKey(),
+  orderId: text("order_id").notNull(),
+  status: text("status").notNull(),
+  mode: text("mode").notNull(),
+  decision: jsonb("decision").$type<Record<string, unknown>>().notNull(),
+  selectedOptionId: text("selected_option_id"),
+  changeNote: text("change_note"),
+  opsDetails: jsonb("ops_details").$type<Record<string, string> | null>(),
+  toolTrace: jsonb("tool_trace").$type<Record<string, unknown>[]>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("agent_runs_order_idx").on(table.orderId, table.updatedAt),
+])

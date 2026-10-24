@@ -1,42 +1,22 @@
-# The Car Delivery Control Room
+# Bahn Control Room — Prompt Operations Hackathon
 
-This is Bahn's challenge for the Prompt Operations Hackathon, 24 to 25 October
-2026.
+Attention-queue control room plus one real **on-the-road** agent, built on Bahn’s official [car-delivery-control-room](https://github.com/Bahn-Express/car-delivery-control-room) packet.
 
-Bahn delivers used cars. A dealer sells a car, a driver from our network picks
-it up and drives it to the buyer. Our agents already do a lot of the routine
-work. The challenge is to build the place where people and agents work
-together to get every car delivered, and one real agent for one part of the
-job.
+Synthetic data only. The agent never contacts the paying customer. Bookings, costs, promise changes and customer messages require human approval.
 
-**Read `PARTICIPANT-BRIEF.md` first.** It says what to build, what to hand in,
-and how we judge.
+## What you get
 
-Everything in this repo is made up. No real people, cars, companies or
-messages.
+1. **Control Room** (`/`) — left: only orders that need a person; right: problem headline, two options with price/time, Approve / Change.
+2. **On-the-road agent** — LLM-in-a-loop with tools (`ask_driver`, `lookup_order`, `gather_facts`, `estimate_recovery`). Ships with a **mock LLM path**; set `OPENAI_API_KEY` for a real model.
+3. Demo seed: Bentley Continental GT roadside stop (`CD-420322` / `ord-00322`) opens with a ready decision card.
+4. Lane board kept at `/lanes` for reference (not the primary UX).
 
-## What is in here
+## Requirements
 
-- `PARTICIPANT-BRIEF.md`: the challenge. Start here.
-- `OPERATIONS-CONTEXT.md`: how car delivery work goes at Bahn, in plain
-  words. Good reading for you and for your coding agent.
-- `dataset/`: 100 made-up orders and everything around them: dealers,
-  drivers, cars, bookings, messages, alerts, documents and events.
-  `dataset/README.md` explains the files. `dataset/SCHEMA.md` explains every
-  field.
-- `attachments/`: made-up documents, receipts and photos that belong to those
-  orders.
-- `starter/`: a small web app that loads the data and shows it: a board of
-  orders, an order page, a support inbox, and pages for customers, drivers and
-  places. Use it, change it, or throw it away.
-- `mockups/`: screenshots of the starter, so you can see it without running
-  it.
-- `check_packet.py`: a script that checks the data is complete. You do not
-  need it, but you can run it with `python3 check_packet.py`.
+- Node.js **24+**
+- Docker (Compose)
 
-## Run the starter
-
-You need Node.js 24 or newer and Docker.
+## Run from a fresh clone
 
 ```sh
 cd starter
@@ -46,26 +26,57 @@ docker compose up -d --wait
 npm run db:push
 npm run db:seed
 npm run attachments:seed
-npm run dev
+npm run dev -- -p 43123 -H 127.0.0.1
 ```
 
-Then open http://localhost:3000.
+Open [http://127.0.0.1:43123](http://127.0.0.1:43123).
 
-If port 5438 or 9009 is already in use on your computer, change it in
-`starter/compose.yaml` and in the matching line of `starter/.env`.
-`starter/README.md` has the details.
+### Ports used here
 
-## Tips
+| Service | Port | Notes |
+|---------|------|--------|
+| Next.js app | **43123** | Uncommon port for this cloud VM (starter default is 3000) |
+| Postgres | 5438 | From `compose.yaml` / `DATABASE_URL` |
+| Attachments S3 API | 9009 | Local RustFS |
+| Attachments console | 9010 | Optional browser console |
 
-- Point your coding agent at `PARTICIPANT-BRIEF.md`, `OPERATIONS-CONTEXT.md`
-  and `dataset/SCHEMA.md` before you start. They explain the world better than
-  the code does.
-- The data is a snapshot. Nothing in it changes by itself. Your agent can
-  pretend to send messages, make calls and book things. Nothing real is
-  connected.
-- Some of the data is messy on purpose. A message can disagree with an
-  address. An alert is a reason to look, not a diagnosis. A quote for a ferry
-  is not a booked ferry.
-- The starter's board of lanes is how people have worked so far. It is not the
-  answer.
-- Questions: our channel on the event Discord, or our booth.
+If 5438 / 9009 / 9010 collide, change them in `starter/compose.yaml` and matching lines in `starter/.env`.
+
+### Real LLM / OpenRouter (optional)
+
+The on-the-road agent uses an OpenAI-compatible client (`OPENAI_BASE_URL` + `OPENAI_API_KEY` + `OPENAI_MODEL`). Mock is the default when the key is unset. **Never commit real keys.**
+
+```sh
+# in starter/.env  (copy from .env.example)
+OPENAI_API_KEY=          # OpenRouter or OpenAI key — never commit
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_MODEL=openai/gpt-4o-mini
+# Optional OpenRouter attribution headers (defaults applied when BASE_URL is openrouter.ai):
+# OPENROUTER_HTTP_REFERER=http://127.0.0.1:43123
+# OPENROUTER_X_TITLE=Bahn Control Room
+```
+
+#### How to test with OpenRouter
+
+1. Put the vars above in `starter/.env` (local only).
+2. Restart the Next.js dev server so it reloads env.
+3. Open the control room — the header shows **agent LLM** when a key is present, otherwise **agent mock**.
+4. Open a case (e.g. `CD-420299`) → **Re-run agent**. After it finishes, the decision card’s agent mode is `llm` (also stored on the run). If the live call fails, the app falls back to mock and logs the error.
+
+## Demo path (about 2 minutes)
+
+1. Open the control room — ferry case `CD-420299` (BMW M4, sold-out overnight) is selected by default; Bentley `CD-420322` is also seeded.
+2. Compare **three ferry lines** (NordSea Link, Baltic Gate Ferries, Silja Route Express) by **Price** / **Time**, with a short price breakdown under each total, then **Approve**.
+3. Fill **Ops completes contacts** (passenger name, phones, hotel confirmation — agent left these blank). Save booking contacts (still mock; no purchase).
+4. Optional: Bentley `CD-420322` for roadside tow (also shows price breakdown). Pitch: Bahn has no on-the-road agent yet — this is that layer.
+
+## Packet layout
+
+- `PARTICIPANT-BRIEF.md`, `OPERATIONS-CONTEXT.md` — challenge brief
+- `dataset/`, `attachments/` — fictional orders and files
+- `starter/` — Next.js app (this solution lives here)
+
+## Notes
+
+- `npm run db:seed` replaces challenge snapshot data; participant table `agent_runs` has no FK into seed tables so reseeding stays safe.
+- All names and messages are fictional.
