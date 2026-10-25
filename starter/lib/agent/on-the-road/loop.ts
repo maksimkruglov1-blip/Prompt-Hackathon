@@ -167,8 +167,8 @@ function tripToTowOption(entry: TripCatalogEntry, orderRef: string, vehicle: str
     timeLabel: entry.timeLabel,
     delayLabel: entry.delayLabel,
     opsNext: dealer
-      ? "Call the customer (a person, not the agent), open Book for roadside info, then approve and fill dispatch contacts."
-      : "Confirm workshop preference with the customer (person), open Book, approve tow. Agent does not purchase.",
+      ? "Open Book (ADAC roadside-assistance info), call the customer (a person) about dealer recovery, Approve, then fill dispatch contacts."
+      : "Open Book (ADAC roadside-assistance info), confirm workshop with the customer (person), Approve, then fill contacts. Agent does not purchase.",
     implications: dealer
       ? "Higher tow cost, but the car goes straight to the right place. Customer message from a person."
       : "Cheaper, faster pickup; journey paused until the car is roadworthy again.",

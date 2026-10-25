@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import type { AgentRunRecord, QueueItem } from "@/lib/agent/types"
+import { factSourceLabel, humanizeClientError } from "@/lib/agent/ui-copy"
 import { AppFrame } from "../app-frame"
 
 type QueueResponse = {
@@ -63,7 +64,7 @@ export function ControlRoom() {
         return ferry?.orderId ?? bentley?.orderId ?? data.items[0]?.orderId ?? null
       })
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load the attention queue")
+      setError(humanizeClientError(cause instanceof Error ? cause.message : "", "Could not load the attention queue"))
     }
   }, [])
 
@@ -93,7 +94,7 @@ export function ControlRoom() {
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return
         setDecision(null)
-        setError(cause instanceof Error ? cause.message : "Could not load the decision card")
+        setError(humanizeClientError(cause instanceof Error ? cause.message : "", "Could not load the decision card"))
       })
       .finally(() => { if (!controller.signal.aborted) setLoadingDecision(false) })
     return () => controller.abort()
@@ -102,6 +103,7 @@ export function ControlRoom() {
   async function runAgent() {
     if (!selectedId) return
     setBusy(true)
+    setError("")
     try {
       const response = await fetch(`/api/agent/on-the-road/${selectedId}`, {
         method: "POST",
@@ -116,7 +118,7 @@ export function ControlRoom() {
       }
       await loadQueue()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Agent failed")
+      setError(humanizeClientError(cause instanceof Error ? cause.message : "", "The agent could not finish. Try again."))
     } finally {
       setBusy(false)
     }
@@ -162,7 +164,7 @@ export function ControlRoom() {
         })
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save the decision")
+      setError(humanizeClientError(cause instanceof Error ? cause.message : "", "Could not save the decision"))
     } finally {
       setBusy(false)
     }
@@ -171,6 +173,7 @@ export function ControlRoom() {
   async function saveBookingDetails() {
     if (!selectedId) return
     setBusy(true)
+    setError("")
     try {
       const response = await fetch(`/api/agent/on-the-road/${selectedId}`, {
         method: "POST",
@@ -185,7 +188,7 @@ export function ControlRoom() {
       }
       setBookingSaved(true)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save booking contacts")
+      setError(humanizeClientError(cause instanceof Error ? cause.message : "", "Could not save booking contacts"))
     } finally {
       setBusy(false)
     }
@@ -197,6 +200,8 @@ export function ControlRoom() {
     ? run.decision.options.find((option) => option.id === run.selectedOptionId) ?? null
     : null
   const bookingFields = chosenOption?.bookingFields ?? []
+  const topFacts = (run?.decision.facts ?? []).slice(0, 6)
+  const isTowCase = chosenOption?.kind === "recovery" || run?.decision.options.some((o) => o.kind === "recovery")
 
   return (
     <AppFrame section="board" board snapshotAt={queue?.snapshotAt ?? null}>
@@ -268,7 +273,18 @@ export function ControlRoom() {
 
           <section className="cr-decision" aria-label="Decision panel">
             {!selectedId && <p className="cr-empty pane">Select an order from the queue.</p>}
-            {selectedId && loadingDecision && <div className="cr-decision-skel" aria-busy="true" />}
+            {selectedId && loadingDecision && (
+              <div className="cr-decision-skel" aria-busy="true" aria-label="Loading decision card" />
+            )}
+            {selectedId && !loadingDecision && !decision && (
+              <div className="cr-callout">
+                <h3>Could not open this case</h3>
+                <p>Refresh the page, or pick another order from the queue. If Docker is down, start it and try again.</p>
+                <button type="button" className="cr-secondary" disabled={busy} onClick={() => void loadQueue()}>
+                  Reload queue
+                </button>
+              </div>
+            )}
             {selectedId && !loadingDecision && decision && (
               <>
                 <header className="cr-decision-head">
@@ -336,6 +352,25 @@ export function ControlRoom() {
                         </div>
                         <p className="cr-timing-impact">{run.decision.deliveryTiming.impactLabel}</p>
                       </div>
+                    )}
+
+                    {topFacts.length > 0 && (
+                      <section className="cr-fact-strip" aria-label="Facts with sources">
+                        <h3>Facts</h3>
+                        <ul>
+                          {topFacts.map((fact, index) => (
+                            <li key={`${fact.label}-${index}`}>
+                              <div className="cr-fact-main">
+                                <strong>{fact.label}</strong>
+                                <p>{fact.value.length > 160 ? `${fact.value.slice(0, 157)}…` : fact.value}</p>
+                              </div>
+                              <span className="cr-source" title={fact.source}>
+                                {factSourceLabel(fact.source, fact.sourceKind)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
                     )}
 
                     <section className="cr-block cr-hero-choice">
@@ -433,7 +468,11 @@ export function ControlRoom() {
                                   >
                                     Book
                                   </a>
-                                  <span className="cr-book-hint">Opens carrier site — you book; agent never does</span>
+                                  <span className="cr-book-hint">
+                                    {option.kind === "recovery"
+                                      ? "ADAC roadside-assistance info — you book the tow; agent never does"
+                                      : "Opens carrier site — you book; agent never does"}
+                                  </span>
                                   <span className="cr-book-url">{option.bookUrl.replace(/^https?:\/\//, "")}</span>
                                 </div>
                               )}
@@ -487,44 +526,68 @@ export function ControlRoom() {
                       )}
                     </footer>
 
-                    {run.status === "approved" && bookingFields.length > 0 && (
-                      <section id="cr-booking-panel" className="cr-booking" aria-label="Ops booking contacts">
+                    {run.status === "approved" && chosenOption && (
+                      <section id="cr-booking-panel" className="cr-booking" aria-label="Ops next steps">
                         <div className="cr-booking-head">
-                          <h3>Ops completes contacts</h3>
-                          <p>
-                            The agent left these blank on purpose — it never contacts the paying customer and does not place
-                            real ferry/hotel bookings. Fill what you need after Approve (mock only).
-                          </p>
+                          <h3>Next for ops</h3>
+                          <ol className="cr-next-steps">
+                            <li>
+                              <b>Book</b>
+                              {chosenOption.bookUrl ? (
+                                <>
+                                  {" — "}
+                                  <a href={chosenOption.bookUrl} target="_blank" rel="noopener noreferrer" className="cr-inline-link">
+                                    {chosenOption.kind === "recovery" ? "open ADAC roadside-assistance info" : "open carrier Book link"}
+                                  </a>
+                                  {" and complete the purchase yourself"}
+                                </>
+                              ) : (
+                                " — complete the booking on the provider site yourself"
+                              )}
+                              . Agent never books.
+                            </li>
+                            <li>
+                              <b>Fill contacts</b> below (passenger / dispatch). Agent left these blank on purpose.
+                            </li>
+                            <li>
+                              <b>{isTowCase || chosenOption.kind === "recovery" ? "Call the dealer / customer" : "Update the dealer"}</b>
+                              {" — a person sends the customer message. Agent must not contact the paying customer."}
+                            </li>
+                          </ol>
                         </div>
-                        <div className="cr-booking-grid">
-                          {bookingFields.map((field) => (
-                            <label key={field.key} className="cr-booking-field" htmlFor={`booking-${field.key}`}>
-                              <span className="cr-booking-label">
-                                {field.label}
-                                {field.required ? " *" : ""}
-                              </span>
-                              <input
-                                id={`booking-${field.key}`}
-                                value={bookingForm[field.key] ?? ""}
-                                placeholder={field.placeholder}
-                                disabled={busy}
-                                onChange={(event) => setBookingForm((prev) => ({ ...prev, [field.key]: event.target.value }))}
-                              />
-                              <span className="cr-booking-reason">{field.reason}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="cr-approve-row">
-                          <button type="button" className="cr-primary" disabled={busy} onClick={() => void saveBookingDetails()}>
-                            Save booking contacts
-                          </button>
-                          {bookingSaved && <span className="cr-booking-saved">Saved — still mock; no purchase made.</span>}
-                        </div>
+                        {bookingFields.length > 0 && (
+                          <>
+                            <div className="cr-booking-grid">
+                              {bookingFields.map((field) => (
+                                <label key={field.key} className="cr-booking-field" htmlFor={`booking-${field.key}`}>
+                                  <span className="cr-booking-label">
+                                    {field.label}
+                                    {field.required ? " *" : ""}
+                                  </span>
+                                  <input
+                                    id={`booking-${field.key}`}
+                                    value={bookingForm[field.key] ?? ""}
+                                    placeholder={field.placeholder}
+                                    disabled={busy}
+                                    onChange={(event) => setBookingForm((prev) => ({ ...prev, [field.key]: event.target.value }))}
+                                  />
+                                  <span className="cr-booking-reason">{field.reason}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="cr-approve-row">
+                              <button type="button" className="cr-primary" disabled={busy} onClick={() => void saveBookingDetails()}>
+                                Save booking contacts
+                              </button>
+                              {bookingSaved && <span className="cr-booking-saved">Saved — still mock; no purchase made.</span>}
+                            </div>
+                          </>
+                        )}
                       </section>
                     )}
 
                     <details className="cr-secondary">
-                      <summary>What happened, facts, and agent work</summary>
+                      <summary>What happened and agent work</summary>
                       <div className="cr-secondary-body">
                         <section className="cr-block">
                           <h3>What happened</h3>
@@ -532,15 +595,17 @@ export function ControlRoom() {
                         </section>
 
                         <section className="cr-block">
-                          <h3>Facts with sources</h3>
+                          <h3>All facts with sources</h3>
                           <ul className="cr-facts">
-                            {run.decision.facts.slice(0, 10).map((fact, index) => (
+                            {run.decision.facts.slice(0, 12).map((fact, index) => (
                               <li key={`${fact.label}-${index}`}>
                                 <div>
                                   <strong>{fact.label}</strong>
                                   <p>{fact.value}</p>
                                 </div>
-                                <span className="cr-source">{fact.source}</span>
+                                <span className="cr-source" title={fact.source}>
+                                  {factSourceLabel(fact.source, fact.sourceKind)}
+                                </span>
                               </li>
                             ))}
                           </ul>

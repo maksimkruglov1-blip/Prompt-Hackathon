@@ -3,6 +3,7 @@ import { buildDecisionCard } from "@/lib/agent/control-room"
 import { runOnTheRoadAgent } from "@/lib/agent/on-the-road/loop"
 import { latestRunForOrder, updateRunDecision } from "@/lib/agent/store"
 import type { DecisionStatus } from "@/lib/agent/types"
+import { humanizeApiError } from "@/lib/agent/ui-copy"
 
 export const runtime = "nodejs"
 
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     const card = await buildDecisionCard(orderId)
     return NextResponse.json({ run, card })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Agent failed"
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error("on-the-road agent failed", error)
+    return NextResponse.json({ error: humanizeApiError(error, "The agent could not finish. Try Re-run agent.") }, { status: 500 })
   }
 }

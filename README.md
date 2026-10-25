@@ -1,14 +1,16 @@
 # Bahn Control Room — Prompt Operations Hackathon
 
-Attention-queue control room plus one real **on-the-road** agent, built on Bahn’s official [car-delivery-control-room](https://github.com/Bahn-Express/car-delivery-control-room) packet.
+Attention-queue **Control Room** plus one real **on-the-road** agent, built on Bahn’s official [car-delivery-control-room](https://github.com/Bahn-Express/car-delivery-control-room) packet.
 
 Synthetic data only. The agent never contacts the paying customer. Bookings, costs, promise changes and customer messages require human approval.
 
+**Product UI: English.**
+
 ## What you get
 
-1. **Control Room** (`/`) — left: only orders that need a person; right: problem headline, two options with price/time, Approve / Change.
-2. **On-the-road agent** — LLM-in-a-loop with tools (`ask_driver`, `lookup_order`, `gather_facts`, `estimate_recovery`, `search_trips`). Ships with a **mock LLM path**; set `OPENAI_API_KEY` for a real model. `search_trips` returns curated Baltic ferry / tow options with real **Book** links (ops opens them; agent never books).
-3. Demo seed: Bentley Continental GT roadside stop (`CD-420322` / `ord-00322`) opens with a ready decision card.
+1. **Control Room** (`/`) — left: only orders that need a person; right: problem, current location, facts with sources, options with **Price / Time**, **Book** links, Approve / Change.
+2. **On-the-road agent** — LLM-in-a-loop with tools (`ask_driver`, `lookup_order`, `gather_facts`, `estimate_recovery`, `search_trips`). Mock path by default; optional OpenRouter / OpenAI key for a live model.
+3. Demo seeds: ferry sold-out `CD-420299` (BMW M4) and roadside Bentley `CD-420322`.
 4. Lane board kept at `/lanes` for reference (not the primary UX).
 
 ## Requirements
@@ -16,9 +18,10 @@ Synthetic data only. The agent never contacts the paying customer. Bookings, cos
 - Node.js **24+**
 - Docker (Compose)
 
-## Run from a fresh clone
+## Clone → run (hand-in path)
 
 ```sh
+# from the repo root
 cd starter
 cp .env.example .env
 npm ci
@@ -29,54 +32,56 @@ npm run attachments:seed
 npm run dev -- -p 43123 -H 127.0.0.1
 ```
 
-Open [http://127.0.0.1:43123](http://127.0.0.1:43123).
+Open [http://127.0.0.1:43123](http://127.0.0.1:43123) — you should see the **Control Room**, not the lane board.
 
-### Ports used here
+### Ports
 
 | Service | Port | Notes |
 |---------|------|--------|
-| Next.js app | **43123** | Uncommon port for this cloud VM (starter default is 3000) |
+| Next.js app | **43123** | Use this port in demos (starter default is 3000) |
 | Postgres | 5438 | From `compose.yaml` / `DATABASE_URL` |
 | Attachments S3 API | 9009 | Local RustFS |
-| Attachments console | 9010 | Optional browser console |
+| Attachments console | 9010 | Optional |
 
-If 5438 / 9009 / 9010 collide, change them in `starter/compose.yaml` and matching lines in `starter/.env`.
+If ports collide, change them in `starter/compose.yaml` and matching lines in `starter/.env`.
 
-### Real LLM / OpenRouter (optional)
+### Optional OpenRouter / OpenAI
 
-The on-the-road agent uses an OpenAI-compatible client (`OPENAI_BASE_URL` + `OPENAI_API_KEY` + `OPENAI_MODEL`). Mock is the default when the key is unset. **Never commit real keys.**
+Without a key the **mock** agent runs (fine for the demo). For a live model, put this in `starter/.env` only — **never commit secrets**:
 
 ```sh
-# in starter/.env  (copy from .env.example)
-OPENAI_API_KEY=          # OpenRouter or OpenAI key — never commit
+OPENAI_API_KEY=          # OpenRouter or OpenAI key
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
 OPENAI_MODEL=openai/gpt-4o-mini
-# Optional OpenRouter attribution headers (defaults applied when BASE_URL is openrouter.ai):
+# Optional:
 # OPENROUTER_HTTP_REFERER=http://127.0.0.1:43123
 # OPENROUTER_X_TITLE=Bahn Control Room
+# TAVILY_API_KEY=          # optional snippets inside search_trips only
 ```
 
-#### How to test with OpenRouter
+Restart the dev server after editing `.env`. The control-room header shows **agent LLM** vs **agent mock**.
 
-1. Put the vars above in `starter/.env` (local only).
-2. Restart the Next.js dev server so it reloads env.
-3. Open the control room — the header shows **agent LLM** when a key is present, otherwise **agent mock**.
-4. Open a case (e.g. `CD-420299`) → **Re-run agent**. After it finishes, the decision card’s agent mode is `llm` (also stored on the run). If the live call fails, the app falls back to mock and logs the error.
+`search_trips` Book URLs (Tallink, Viking Line, Finnlines, Eckerö, ADAC roadside-assistance info) work **without** any paid search key.
 
-Optional `TAVILY_API_KEY` only adds web snippets inside `search_trips`. Catalog **Book** URLs (Tallink, Viking Line, Finnlines, Eckerö, ADAC roadside) work without it — never required for the mock/LLM demo.
+## Demo path (~2 minutes)
 
-## Demo path (about 2 minutes)
+1. Open Control Room — ferry case `CD-420299` is selected by default; Bentley `CD-420322` is in the queue.
+2. Read **Problem**, **Current location**, and **Facts** (each fact shows its source).
+3. Compare options by **Price** / **Time**, open **Book** (you book; agent never does), then **Approve**.
+4. Follow **Next for ops**: Book → fill contacts → person updates the dealer / customer.
+5. Optional: Bentley `CD-420322` for roadside tow (ADAC roadside-assistance Book link).
 
-1. Open the control room — ferry case `CD-420299` (BMW M4, sold-out overnight) is selected by default; Bentley `CD-420322` is also seeded.
-2. Compare ferry lines from `search_trips` (e.g. Tallink Silja, Viking Line, Finnlines) by **Price** / **Time**, open **Book** for a real carrier site in a new tab, then **Approve**. Agent never books.
-3. Fill **Ops completes contacts** (passenger name, phones, hotel confirmation — agent left these blank). Save booking contacts (still mock; no purchase).
-4. Optional: Bentley `CD-420322` for roadside tow (also shows price breakdown + Book). Pitch: Bahn has no on-the-road agent yet — this is that layer.
+Pitch: Bahn has no on-the-road agent yet — this is that layer.
+
+## GitHub hand-in
+
+This cloud branch tracks Origin. **You** push to your public GitHub fork ([Prompt-Hackathon](https://github.com/maksimkruglov1-blip/Prompt-Hackathon) or your team repo) with your own credentials / PAT. Do not commit `.env` or API keys.
 
 ## Packet layout
 
 - `PARTICIPANT-BRIEF.md`, `OPERATIONS-CONTEXT.md` — challenge brief
 - `dataset/`, `attachments/` — fictional orders and files
-- `starter/` — Next.js app (this solution lives here)
+- `starter/` — Next.js app (this solution)
 
 ## Notes
 

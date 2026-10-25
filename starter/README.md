@@ -2,7 +2,7 @@
 
 Bahn packet starter with a **Control Room** attention queue at `/` and one **on-the-road** agent. The lane board remains at `/lanes` as a reference view, not the primary UX.
 
-See the repo root `README.md` for the full runbook. Short version:
+**Full hand-in runbook:** repo root `README.md`.
 
 ```sh
 cp .env.example .env
@@ -16,25 +16,15 @@ npm run dev -- -p 43123 -H 127.0.0.1
 
 Open http://127.0.0.1:43123.
 
-Optional LLM (OpenRouter or OpenAI — never commit keys). Copy from `.env.example`:
-
-```sh
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_MODEL=openai/gpt-4o-mini
-```
-
-Without `OPENAI_API_KEY`, the mock agent runs. Control room header shows **agent LLM** vs **agent mock**. See root `README.md` for the OpenRouter test steps.
-
-Optional `TAVILY_API_KEY` enriches `search_trips` with web snippets only. Curated Baltic ferry / tow catalog Book URLs work without any search key.
+Optional OpenRouter / OpenAI (never commit keys) — see `.env.example` and root README. Without a key, **agent mock** runs. Optional `TAVILY_API_KEY` only adds search snippets; Book URLs work without it.
 
 Participant additions:
 
 - `lib/agent/` — on-the-road tools (`search_trips` + catalog), mock/LLM loop, control-room projections
+- Decision card: facts with sources, current location, Book links, Next for ops after Approve
 - `app/api/control-room`, `app/api/agent/on-the-road`
 - `agent_runs` table (no FK into seed data)
-- Demo seed for Bentley roadside case `ord-00322`
-- Decision cards show **Book** links from `search_trips` (ops books; agent never does)
+- Demos: ferry `ord-00299` / `CD-420299`, Bentley roadside `ord-00322` / `CD-420322`
 
 ---
 

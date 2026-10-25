@@ -120,7 +120,7 @@ export const TRIP_CATALOG: TripCatalogEntry[] = [
   {
     id: "trip-tow-dealer",
     kind: "tow",
-    lineName: "Roadside tow",
+    lineName: "Roadside assistance",
     title: "Tow to dealer / receiving site",
     originHint: "ingolstadt|munich|germany|motorway|a9",
     destinationHint: "hamburg|dealer|germany",
@@ -132,7 +132,8 @@ export const TRIP_CATALOG: TripCatalogEntry[] = [
     durationLabel: "~4 h to load + transit",
     departureWindow: "As soon as truck available",
     bookUrl: "https://www.adac.de/reise-freizeit/verkehr/panne/",
-    summary: "Mock tow package to dealer. Book link opens ADAC roadside info — ops places the real tow booking.",
+    summary:
+      "Mock tow package to dealer. Book opens ADAC roadside-assistance info (public help page) — ops places the real tow; agent never books.",
     components: [
       { label: "Tow truck", priceLabel: "€310", timeLabel: "4 h ETA" },
       { label: "Driver waiting stipend", priceLabel: "€45", timeLabel: "Until loaded" },
@@ -142,7 +143,7 @@ export const TRIP_CATALOG: TripCatalogEntry[] = [
   {
     id: "trip-tow-workshop",
     kind: "tow",
-    lineName: "Roadside tow",
+    lineName: "Roadside assistance",
     title: "Tow to nearby workshop",
     originHint: "ingolstadt|munich|germany|motorway|a9",
     destinationHint: "workshop|garage|ingolstadt",
@@ -154,7 +155,8 @@ export const TRIP_CATALOG: TripCatalogEntry[] = [
     durationLabel: "~2.5 h to workshop",
     departureWindow: "As soon as truck available",
     bookUrl: "https://www.adac.de/reise-freizeit/verkehr/panne/",
-    summary: "Mock tow to a nearby workshop. Human books via roadside provider; agent does not purchase.",
+    summary:
+      "Mock tow to a nearby workshop. Book opens ADAC roadside-assistance info — ops books the truck; agent does not purchase.",
     components: [
       { label: "Tow truck", priceLabel: "€240", timeLabel: "2.5 h ETA" },
       { label: "Workshop intake hold", priceLabel: "€35", timeLabel: "Mock" },
