@@ -566,6 +566,15 @@ details.more > :not(summary) { margin-top: 8px; }
 .cr-problem-label {
   font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--red-ink); opacity: 0.75;
 }
+.cr-location {
+  display: grid; gap: 2px; max-width: 46ch; margin: 0 0 10px;
+  font-size: 14px; line-height: 1.35; color: var(--ink);
+}
+.cr-location-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--subtle);
+}
+.cr-location-value { font-weight: 500; }
+.cr-location.unknown .cr-location-value { color: var(--muted); font-weight: 400; }
 .cr-timing {
   display: grid; gap: 6px; max-width: 520px; margin: 0 0 8px; padding: 12px 14px; border-radius: 12px;
   background: var(--birch); box-shadow: inset 0 0 0 1px var(--hair);
@@ -590,9 +599,15 @@ details.more > :not(summary) { margin-top: 8px; }
 .cr-breakdown-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--subtle); margin: 0; }
 .cr-comp-time { color: var(--subtle); text-align: right; }
 .cr-components-total { border-top: 1px solid var(--hair); padding-top: 4px !important; margin-top: 2px; font-weight: 600; color: var(--ink) !important; }
-.cr-option { text-align: left; border: 1px solid var(--hair); border-radius: 16px; padding: 16px 16px 14px; background: var(--birch); color: inherit; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; min-height: 100%; display: flex; flex-direction: column; gap: 8px; }
-.cr-option:hover:not(:disabled) { border-color: var(--sand); transform: translateY(-1px); }
+.cr-option { text-align: left; border: 1px solid var(--hair); border-radius: 16px; padding: 16px 16px 14px; background: var(--birch); color: inherit; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; min-height: 100%; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
+.cr-option:hover:not(.disabled) { border-color: var(--sand); transform: translateY(-1px); }
 .cr-option.selected { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink), 0 8px 24px rgba(18, 17, 14, 0.06); }
+.cr-option.disabled { cursor: default; opacity: 0.92; }
+.cr-book-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--hair); position: relative; z-index: 3; }
+.cr-book { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; background: var(--ink); color: var(--birch); border: 1px solid var(--ink); cursor: pointer; position: relative; z-index: 3; }
+.cr-book:hover { transform: translateY(-1px); }
+.cr-book-hint { font-size: 11px; color: var(--subtle); line-height: 1.3; max-width: 16rem; }
+.cr-book-url { font-size: 11px; color: var(--muted); word-break: break-all; max-width: 100%; }
 .cr-option-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .cr-option-top strong { font-size: 15px; font-weight: 600; line-height: 1.25; }
 .cr-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 2px 0 0; padding: 12px; border-radius: 12px; background: var(--canvas); }
@@ -605,7 +620,8 @@ details.more > :not(summary) { margin-top: 8px; }
 .cr-option-summary { font-size: 13px !important; color: var(--muted) !important; line-height: 1.4 !important; margin: 0 !important; flex: 1; }
 .cr-ops { margin: 0 !important; font-size: 12.5px !important; color: var(--brown) !important; line-height: 1.4 !important; }
 .cr-ops b { font-weight: 600; color: var(--ink); }
-.cr-approve { position: sticky; bottom: 0; margin-top: 4px; padding: 14px 0 4px; background: linear-gradient(180deg, transparent, var(--canvas) 28%); z-index: 1; }
+/* Non-sticky actions — sticky fade previously overlapped Book and confused click tests */
+.cr-approve { margin-top: 12px; padding: 14px 0 8px; border-top: 1px solid var(--hair); }
 .cr-approve-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .cr-kind-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .cr-components { display: grid; gap: 3px; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--tray); }

@@ -52,6 +52,11 @@ export type DecisionOption = {
   components?: { label: string; priceLabel: string; timeLabel: string }[]
   /** Fields ops must fill after Approve; agent leaves these blank. */
   bookingFields?: OpsBookingField[]
+  /**
+   * Public carrier / roadside booking entry URL from search_trips.
+   * Ops opens this in a new tab — the agent never books.
+   */
+  bookUrl?: string
 }
 
 export type DecisionStatus = "pending" | "approved" | "changed" | "dismissed"
@@ -71,6 +76,8 @@ export type AgentDecision = {
   summary: string
   /** Short ops headline of what’s wrong (1–2 lines), shown above the options. */
   problem: string
+  /** Where the car is now, when known (ops strip under Problem). */
+  currentLocation?: string
   /** Promised delivery vs now-expected impact. */
   deliveryTiming: DeliveryTiming
   happened: string

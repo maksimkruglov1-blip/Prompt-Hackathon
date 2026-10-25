@@ -7,7 +7,7 @@ Synthetic data only. The agent never contacts the paying customer. Bookings, cos
 ## What you get
 
 1. **Control Room** (`/`) — left: only orders that need a person; right: problem headline, two options with price/time, Approve / Change.
-2. **On-the-road agent** — LLM-in-a-loop with tools (`ask_driver`, `lookup_order`, `gather_facts`, `estimate_recovery`). Ships with a **mock LLM path**; set `OPENAI_API_KEY` for a real model.
+2. **On-the-road agent** — LLM-in-a-loop with tools (`ask_driver`, `lookup_order`, `gather_facts`, `estimate_recovery`, `search_trips`). Ships with a **mock LLM path**; set `OPENAI_API_KEY` for a real model. `search_trips` returns curated Baltic ferry / tow options with real **Book** links (ops opens them; agent never books).
 3. Demo seed: Bentley Continental GT roadside stop (`CD-420322` / `ord-00322`) opens with a ready decision card.
 4. Lane board kept at `/lanes` for reference (not the primary UX).
 
@@ -63,12 +63,14 @@ OPENAI_MODEL=openai/gpt-4o-mini
 3. Open the control room — the header shows **agent LLM** when a key is present, otherwise **agent mock**.
 4. Open a case (e.g. `CD-420299`) → **Re-run agent**. After it finishes, the decision card’s agent mode is `llm` (also stored on the run). If the live call fails, the app falls back to mock and logs the error.
 
+Optional `TAVILY_API_KEY` only adds web snippets inside `search_trips`. Catalog **Book** URLs (Tallink, Viking Line, Finnlines, Eckerö, ADAC roadside) work without it — never required for the mock/LLM demo.
+
 ## Demo path (about 2 minutes)
 
 1. Open the control room — ferry case `CD-420299` (BMW M4, sold-out overnight) is selected by default; Bentley `CD-420322` is also seeded.
-2. Compare **three ferry lines** (NordSea Link, Baltic Gate Ferries, Silja Route Express) by **Price** / **Time**, with a short price breakdown under each total, then **Approve**.
+2. Compare ferry lines from `search_trips` (e.g. Tallink Silja, Viking Line, Finnlines) by **Price** / **Time**, open **Book** for a real carrier site in a new tab, then **Approve**. Agent never books.
 3. Fill **Ops completes contacts** (passenger name, phones, hotel confirmation — agent left these blank). Save booking contacts (still mock; no purchase).
-4. Optional: Bentley `CD-420322` for roadside tow (also shows price breakdown). Pitch: Bahn has no on-the-road agent yet — this is that layer.
+4. Optional: Bentley `CD-420322` for roadside tow (also shows price breakdown + Book). Pitch: Bahn has no on-the-road agent yet — this is that layer.
 
 ## Packet layout
 

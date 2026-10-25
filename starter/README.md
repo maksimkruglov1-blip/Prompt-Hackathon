@@ -26,12 +26,15 @@ OPENAI_MODEL=openai/gpt-4o-mini
 
 Without `OPENAI_API_KEY`, the mock agent runs. Control room header shows **agent LLM** vs **agent mock**. See root `README.md` for the OpenRouter test steps.
 
+Optional `TAVILY_API_KEY` enriches `search_trips` with web snippets only. Curated Baltic ferry / tow catalog Book URLs work without any search key.
+
 Participant additions:
 
-- `lib/agent/` — on-the-road tools, mock/LLM loop, control-room projections
+- `lib/agent/` — on-the-road tools (`search_trips` + catalog), mock/LLM loop, control-room projections
 - `app/api/control-room`, `app/api/agent/on-the-road`
 - `agent_runs` table (no FK into seed data)
 - Demo seed for Bentley roadside case `ord-00322`
+- Decision cards show **Book** links from `search_trips` (ops books; agent never does)
 
 ---
 

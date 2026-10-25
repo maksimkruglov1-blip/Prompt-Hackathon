@@ -4,6 +4,7 @@ import { buildBoardCard } from "@/lib/present/board"
 import { loadBoardBundles, loadOrder } from "@/lib/present/load"
 import { relativeTo } from "@/lib/present/time"
 import type { Tone } from "@/lib/present/types"
+import { resolveCurrentLocation } from "./current-location"
 import { agentMode, runNeedsPriceTimeRefresh, runOnTheRoadAgent } from "./on-the-road/loop"
 import { latestRunForOrder, runsByOrderIds } from "./store"
 import type { AgentRunRecord, QueueItem } from "./types"
@@ -90,6 +91,8 @@ export async function buildDecisionCard(orderId: string, opts?: { ensureAgent?: 
     run = await runOnTheRoadAgent(orderId)
   }
 
+  const currentLocation = resolveCurrentLocation(loaded, run)
+
   return {
     orderId,
     reference: loaded.order.reference,
@@ -107,6 +110,8 @@ export async function buildDecisionCard(orderId: string, opts?: { ensureAgent?: 
     })),
     onRoad,
     mode: agentMode(),
+    /** Where the car is now — under Problem on the decision card. */
+    currentLocation,
     run,
   }
 }
@@ -115,6 +120,8 @@ export async function buildDecisionCard(orderId: string, opts?: { ensureAgent?: 
 export async function ensureDemoSeed(): Promise<void> {
   for (const demoId of ["ord-00299", "ord-00322"]) {
     const existing = await latestRunForOrder(demoId)
+    // Never wipe an ops decision by re-running the agent under the queue.
+    if (existing && (existing.status === "approved" || existing.status === "changed")) continue
     if (existing && !runNeedsPriceTimeRefresh(existing)) continue
     await runOnTheRoadAgent(demoId)
   }

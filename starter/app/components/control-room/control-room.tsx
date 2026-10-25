@@ -22,6 +22,7 @@ type DecisionResponse = {
   onRoad: boolean
   mode: "mock" | "llm"
   run: AgentRunRecord | null
+  currentLocation?: { label: string; known: boolean; source: string }
   alerts: { id: string; signal: string; severity: string; status: string; summary: string }[]
   attention: { title: string; detail: string | null; tone: string; short: string }[]
   error?: string
@@ -123,7 +124,17 @@ export function ControlRoom() {
 
   async function decide(status: "approved" | "changed") {
     if (!selectedId) return
+    const optionId =
+      pickedOption
+      ?? decision?.run?.decision.recommendationId
+      ?? decision?.run?.decision.options[0]?.id
+      ?? null
+    if (status === "approved" && !optionId) {
+      setError("Select an option before Approve")
+      return
+    }
     setBusy(true)
+    setError("")
     try {
       const response = await fetch(`/api/agent/on-the-road/${selectedId}`, {
         method: "POST",
@@ -131,7 +142,7 @@ export function ControlRoom() {
         body: JSON.stringify({
           action: "decide",
           status,
-          optionId: pickedOption,
+          optionId,
           changeNote: changeNote || undefined,
         }),
       })
@@ -144,6 +155,12 @@ export function ControlRoom() {
       }
       setShowChange(false)
       await loadQueue()
+      // Sticky footer can hide the booking block — bring ops contacts into view after Approve
+      if (status === "approved") {
+        requestAnimationFrame(() => {
+          document.getElementById("cr-booking-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+        })
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save the decision")
     } finally {
@@ -291,6 +308,22 @@ export function ControlRoom() {
                       {run.decision.problem || run.decision.summary || run.decision.happened}
                     </p>
 
+                    {(() => {
+                      const fromDecision = run.decision.currentLocation?.trim() || null
+                      const locationLabel =
+                        decision.currentLocation?.label
+                        ?? fromDecision
+                        ?? "Location unknown"
+                      const known = decision.currentLocation?.known
+                        ?? Boolean(fromDecision && !/^location unknown$/i.test(fromDecision))
+                      return (
+                        <p className={`cr-location${known ? "" : " unknown"}`} role="status">
+                          <span className="cr-location-label">Current location</span>
+                          <span className="cr-location-value">{locationLabel}</span>
+                        </p>
+                      )
+                    })()}
+
                     {run.decision.deliveryTiming && (
                       <div className={`cr-timing tone-${run.decision.deliveryTiming.tone}`} role="status">
                         <div className="cr-timing-row">
@@ -316,15 +349,23 @@ export function ControlRoom() {
                         {run.decision.options.map((option) => {
                           const selected = pickedOption === option.id
                           const recommended = run.decision.recommendationId === option.id
+                          const selectable = pending && !busy
                           return (
-                            <button
+                            <div
                               key={option.id}
-                              type="button"
                               role="radio"
+                              tabIndex={selectable ? 0 : -1}
                               aria-checked={selected}
-                              className={`cr-option${selected ? " selected" : ""}`}
-                              disabled={!pending || busy}
-                              onClick={() => setPickedOption(option.id)}
+                              aria-disabled={!selectable}
+                              className={`cr-option${selected ? " selected" : ""}${!selectable ? " disabled" : ""}`}
+                              onClick={() => { if (selectable) setPickedOption(option.id) }}
+                              onKeyDown={(event) => {
+                                if (!selectable) return
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault()
+                                  setPickedOption(option.id)
+                                }
+                              }}
                             >
                               {option.lineName && (
                                 <p className="cr-line-name">{option.lineName}</p>
@@ -371,7 +412,32 @@ export function ControlRoom() {
                               )}
                               <p className="cr-option-summary">{option.summary}</p>
                               <p className="cr-ops"><b>Ops:</b> {option.opsNext}</p>
-                            </button>
+                              {option.bookUrl && (
+                                <div
+                                  className="cr-book-row"
+                                  onClick={(event) => event.stopPropagation()}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onKeyDown={(event) => event.stopPropagation()}
+                                >
+                                  <a
+                                    className="cr-book"
+                                    data-testid={`book-${option.id}`}
+                                    href={option.bookUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-disabled={undefined}
+                                    onClick={(event) => event.stopPropagation()}
+                                    onMouseDown={(event) => event.stopPropagation()}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                  >
+                                    Book
+                                  </a>
+                                  <span className="cr-book-hint">Opens carrier site — you book; agent never does</span>
+                                  <span className="cr-book-url">{option.bookUrl.replace(/^https?:\/\//, "")}</span>
+                                </div>
+                              )}
+                            </div>
                           )
                         })}
                       </div>
@@ -389,10 +455,16 @@ export function ControlRoom() {
                       {pending && (
                         <>
                           <div className="cr-approve-row">
-                            <button type="button" className="cr-primary" disabled={busy || !pickedOption} onClick={() => void decide("approved")}>
+                            <button
+                              type="button"
+                              className="cr-primary"
+                              data-testid="approve-decision"
+                              disabled={busy || !pickedOption}
+                              onClick={() => void decide("approved")}
+                            >
                               Approve
                             </button>
-                            <button type="button" className="cr-secondary" disabled={busy} onClick={() => setShowChange((v) => !v)}>
+                            <button type="button" className="cr-secondary" data-testid="change-decision" disabled={busy} onClick={() => setShowChange((v) => !v)}>
                               Change
                             </button>
                           </div>
@@ -416,7 +488,7 @@ export function ControlRoom() {
                     </footer>
 
                     {run.status === "approved" && bookingFields.length > 0 && (
-                      <section className="cr-booking" aria-label="Ops booking contacts">
+                      <section id="cr-booking-panel" className="cr-booking" aria-label="Ops booking contacts">
                         <div className="cr-booking-head">
                           <h3>Ops completes contacts</h3>
                           <p>

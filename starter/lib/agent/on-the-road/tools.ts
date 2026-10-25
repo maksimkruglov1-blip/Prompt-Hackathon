@@ -3,12 +3,15 @@ import "server-only"
 import { loadOrder } from "@/lib/present/load"
 import { str } from "@/lib/present/bundle"
 import type { AgentAction, AgentFact } from "../types"
+import { searchTripCatalog, type TripCatalogEntry, type TripSearchArgs } from "./trip-catalog"
 
 export type ToolContext = {
   orderId: string
   now: string
   actions: AgentAction[]
   facts: AgentFact[]
+  /** Last search_trips catalog hits — used to shape decision options with real bookUrl. */
+  tripResults?: TripCatalogEntry[]
 }
 
 export type ToolResult = { ok: true; output: string; facts?: AgentFact[] } | { ok: false; error: string }
@@ -31,17 +34,18 @@ export async function askDriver(ctx: ToolContext, question: string): Promise<Too
   let reply: string
   if (isSafety) {
     const q = question.toLowerCase()
-    if (q.includes("safe") || q.includes("safety") || q.includes("turvall")) {
-      reply = `${driverName}: Yes — I'm in a service-area car park, engine off, hazard lights on. Nobody injured.`
+    // Prefer location when the question asks where — ops needs a place on the decision card.
+    if (q.includes("location") || q.includes("where") || q.includes("sijaint")) {
+      reply = `${driverName}: A9 northbound service area near Ingolstadt. I can wait here.`
+    } else if (q.includes("safe") || q.includes("safety") || q.includes("turvall")) {
+      reply = `${driverName}: Yes — I'm in a service-area car park near Ingolstadt, engine off, hazard lights on. Nobody injured.`
     } else if (q.includes("photo") || q.includes("dashboard") || q.includes("light")) {
       reply = `${driverName}: Dashboard photo sent. Red warning triangle with a car silhouette; power feels limited when accelerating.`
-    } else if (q.includes("location") || q.includes("where") || q.includes("sijaint")) {
-      reply = `${driverName}: A9 northbound service area near Ingolstadt. I can wait here.`
     } else {
-      reply = `${driverName}: Still stopped safely. Car should not be driven. Waiting for recovery instructions.`
+      reply = `${driverName}: Still stopped safely near Ingolstadt. Car should not be driven. Waiting for recovery instructions.`
     }
   } else if (isFerry) {
-    reply = `${driverName}: I'm at the terminal check-in. The sailing I was booked on is full / at risk. I need a new plan before the customer promise slips.`
+    reply = `${driverName}: I'm at West Baltic terminal check-in. The sailing I was booked on is full / at risk. I need a new plan before the customer promise slips.`
   } else {
     reply = `${driverName}: On site and reachable. ${question.slice(0, 120)} — answered from the mock driver.`
   }
@@ -161,6 +165,110 @@ export async function estimateRecovery(ctx: ToolContext, destination: "dealer" |
   return { ok: true, output, facts }
 }
 
+function formatTripOption(entry: TripCatalogEntry): string {
+  const breakdown = entry.components.map((c) => `${c.label} ${c.priceLabel}`).join("; ")
+  return [
+    `[${entry.id}] ${entry.lineName} — ${entry.title}`,
+    `price=${entry.priceLabel} duration=${entry.durationLabel} departure=${entry.departureWindow}`,
+    `time=${entry.timeLabel} delay=${entry.delayLabel}`,
+    `bookUrl=${entry.bookUrl}`,
+    `breakdown: ${breakdown}`,
+    entry.summary,
+  ].join(" | ")
+}
+
+/** Optional web enrichment — catalog URLs stay authoritative; never invent book links. */
+async function optionalWebEnrichment(args: TripSearchArgs): Promise<string | null> {
+  const key = process.env.TAVILY_API_KEY?.trim()
+  if (!key) return null
+  try {
+    const query = `${args.prefer === "tow" ? "tow recovery" : "ferry booking"} ${args.origin} to ${args.destination} Baltic`
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: key,
+        query,
+        search_depth: "basic",
+        max_results: 3,
+        include_answer: false,
+      }),
+    })
+    if (!response.ok) return `Web search skipped (HTTP ${response.status}).`
+    const json = await response.json() as { results?: { title?: string; url?: string; content?: string }[] }
+    const rows = (json.results ?? []).slice(0, 3)
+    if (!rows.length) return "Web search returned no extra snippets."
+    return rows
+      .map((row, i) => `${i + 1}. ${row.title ?? "result"} — ${row.url ?? ""} — ${(row.content ?? "").slice(0, 120)}`)
+      .join("\n")
+  } catch (error) {
+    return `Web search failed: ${error instanceof Error ? error.message : "unknown error"}`
+  }
+}
+
+/**
+ * Look up trip options from where the car is to where it must go.
+ * Prefer curated Baltic ferry + roadside catalog with real public bookUrl values.
+ * Optional TAVILY_API_KEY adds snippets only — never invent booking URLs.
+ * Does not book or contact anyone.
+ */
+export async function searchTrips(
+  ctx: ToolContext,
+  args: {
+    origin?: string
+    destination?: string
+    prefer?: string
+    earliestDeparture?: string
+    vehicleNote?: string
+  },
+): Promise<ToolResult> {
+  const loaded = await loadOrder(ctx.orderId)
+  if (!loaded) return { ok: false, error: "Order not found" }
+
+  const origin =
+    (args.origin?.trim() ||
+      (loaded.pickup ? `${loaded.pickup.city}, ${loaded.pickup.country}` : "") ||
+      "Germany")
+  const destination =
+    (args.destination?.trim() ||
+      (loaded.delivery ? `${loaded.delivery.city}, ${loaded.delivery.country}` : "") ||
+      "Helsinki, Finland")
+
+  const preferRaw = (args.prefer ?? "any").toLowerCase()
+  const prefer: TripSearchArgs["prefer"] =
+    preferRaw === "ferry" || preferRaw === "tow" ? preferRaw : "any"
+
+  const searchArgs: TripSearchArgs = {
+    origin,
+    destination,
+    prefer,
+    earliestDeparture: args.earliestDeparture,
+    vehicleNote: args.vehicleNote,
+  }
+
+  const hits = searchTripCatalog(searchArgs)
+  ctx.tripResults = hits
+
+  const lines = hits.map(formatTripOption)
+  const webNote = await optionalWebEnrichment(searchArgs)
+  const output = [
+    `search_trips ${origin} → ${destination} (prefer=${prefer}).`,
+    `Returning ${hits.length} curated options with real bookUrl values. Agent must NOT invent URLs or book.`,
+    ...lines,
+    webNote ? `Optional web snippets (do not replace catalog bookUrl):\n${webNote}` : "Catalog-only (no TAVILY_API_KEY).",
+  ].join("\n")
+
+  const facts: AgentFact[] = hits.map((hit) => ({
+    label: `Trip · ${hit.lineName}`,
+    value: `${hit.priceLabel} · ${hit.timeLabel} · book: ${hit.bookUrl}`,
+    source: "search_trips catalog",
+    sourceKind: "tool",
+  }))
+  ctx.facts.push(...facts)
+  pushAction(ctx, "search_trips", `Found ${hits.length} trip options ${origin} → ${destination}`, output.slice(0, 600))
+  return { ok: true, output, facts }
+}
+
 export const TOOL_DEFINITIONS = [
   {
     name: "ask_driver",
@@ -186,6 +294,21 @@ export const TOOL_DEFINITIONS = [
       required: ["destination"],
     },
   },
+  {
+    name: "search_trips",
+    description:
+      "Look up ferry / tow options from the car's current area to where it must go. Returns 2–4 options with line name, price estimate, duration, departure window, bookUrl, and price breakdown. Call this BEFORE proposing ferry options. Use only returned bookUrl values — never invent URLs. Does not book.",
+    parameters: {
+      type: "object",
+      properties: {
+        origin: { type: "string", description: "Where the car is now (city/region). Defaults from the order pickup." },
+        destination: { type: "string", description: "Where the car must go. Defaults from the order delivery." },
+        prefer: { type: "string", enum: ["ferry", "tow", "any"], description: "Prefer ferry, tow, or either." },
+        earliestDeparture: { type: "string", description: "Earliest departure window the driver can make (free text)." },
+        vehicleNote: { type: "string", description: "Vehicle / driver constraints (height, electric, cabin needed)." },
+      },
+    },
+  },
 ] as const
 
 export async function executeTool(
@@ -204,7 +327,16 @@ export async function executeTool(
     const dest = args.destination === "workshop" ? "workshop" : "dealer"
     return estimateRecovery(ctx, dest)
   }
-  if (name === "book_tow" || name === "change_promise" || name === "send_customer_message") {
+  if (name === "search_trips") {
+    return searchTrips(ctx, {
+      origin: typeof args.origin === "string" ? args.origin : undefined,
+      destination: typeof args.destination === "string" ? args.destination : undefined,
+      prefer: typeof args.prefer === "string" ? args.prefer : undefined,
+      earliestDeparture: typeof args.earliestDeparture === "string" ? args.earliestDeparture : undefined,
+      vehicleNote: typeof args.vehicleNote === "string" ? args.vehicleNote : undefined,
+    })
+  }
+  if (name === "book_tow" || name === "change_promise" || name === "send_customer_message" || name === "book_ferry" || name === "book_hotel") {
     pushAction(ctx, name, "Blocked until human approval")
     return { ok: false, error: "Requires human approval before booking, cost, date change or customer message." }
   }

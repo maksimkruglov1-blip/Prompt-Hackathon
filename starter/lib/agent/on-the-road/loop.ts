@@ -6,7 +6,9 @@ import { str } from "@/lib/present/bundle"
 import { fmtRange } from "@/lib/present/time"
 import { saveRun } from "../store"
 import type { AgentDecision, AgentFact, AgentRunRecord, DecisionOption, DeliveryTiming, OpsBookingField } from "../types"
+import { resolveCurrentLocation } from "../current-location"
 import { executeTool, TOOL_DEFINITIONS, type ToolContext } from "./tools"
+import { searchTripCatalog, type TripCatalogEntry } from "./trip-catalog"
 
 const FERRY_BOOKING_FIELDS: OpsBookingField[] = [
   {
@@ -58,8 +60,10 @@ You help freelance drivers who are already moving a car: breakdowns, warning lig
 Rules:
 - Never contact the paying customer (dealer/buyer). Drivers and pickup sites are fine.
 - Do cheap work first: ask the driver, look up the order, gather facts, estimate recovery.
-- Never book a tow, change a delivery promise, or message the customer without human approval.
-- Finish by proposing two or three concrete alternatives for a human in operations. For ferry cases, each option should be a different ferry line/carrier with price and time.
+- For ferry / sailing / lodging plans: you MUST call search_trips (origin → destination, prefer=ferry) BEFORE proposing options. For roadside tow plans, call search_trips with prefer=tow (and/or estimate_recovery).
+- When proposing options, copy lineName, priceEur, priceLabel, timeLabel, delayLabel, components, and bookUrl ONLY from search_trips tool results. Never invent booking URLs.
+- Never book a ferry, hotel, or tow; never change a delivery promise; never message the customer without human approval. Ops opens bookUrl and books.
+- Finish by proposing two to four concrete alternatives for a human in operations. For ferry cases, each option should be a different ferry line/carrier with price, time, and bookUrl.
 - Write clear ops-facing English. Cite facts you gathered.`
 
 type LlmMessage = {
@@ -88,144 +92,121 @@ function uniqFacts(facts: AgentFact[]): AgentFact[] {
   return out
 }
 
-function roadsideOptions(orderRef: string, vehicle: string, destinationCity: string): [DecisionOption, DecisionOption] {
-  return [
-    {
-      id: "tow-dealer",
-      title: "Tow to dealer / receiving site",
-      summary: `Tow the ${vehicle} to the customer's site in ${destinationCity}. Driver stays with the car until it is loaded.`,
-      priceEur: 380,
-      priceLabel: "€380",
-      etaHours: 4,
-      timeLabel: "4 h tow ETA",
-      delayLabel: "Delivery tomorrow evening",
-      opsNext: "Call the customer (a person, not the agent): their own roadside assist or Bahn tow to their site. Then approve the booking.",
-      implications: "Higher tow cost, but the car goes straight to the right place. Customer message from a person.",
-      requiresApproval: ["book_tow", "update_delivery_promise", "customer_message"],
-      kind: "recovery",
-      components: [
-        { label: "Tow truck", priceLabel: "€310", timeLabel: "4 h ETA" },
-        { label: "Driver waiting stipend", priceLabel: "€45", timeLabel: "Until loaded" },
-        { label: "Service-area fee", priceLabel: "€25", timeLabel: "Mock" },
-      ],
-      bookingFields: [
-        {
-          key: "towDispatchContact",
-          label: "Tow dispatch phone / case ref",
-          placeholder: "After you book the truck",
-          required: true,
-          reason: "Agent quotes only — ops places the booking and records the contact.",
-        },
-        {
-          key: "customerNotifyNote",
-          label: "Note for customer update (ops sends)",
-          placeholder: "Late delivery / recovery plan",
-          required: false,
-          reason: "Agent must not message the paying customer.",
-        },
-      ],
-    },
-    {
-      id: "tow-workshop",
-      title: "Tow to nearby workshop",
-      summary: `Tow to a workshop near Ingolstadt, diagnose the red warning, then replan the remaining leg of ${orderRef}.`,
-      priceEur: 290,
-      priceLabel: "€290",
-      etaHours: 2.5,
-      timeLabel: "2.5 h tow ETA",
-      delayLabel: "Delivery +1–2 days",
-      opsNext: "Call the customer for workshop preference / spend, approve the tow. Keep the driver on standby or release after handover.",
-      implications: "Cheaper, faster pickup; journey paused until the car is roadworthy again.",
-      requiresApproval: ["book_tow", "update_delivery_promise", "customer_message"],
-      kind: "recovery",
-      components: [
-        { label: "Tow truck", priceLabel: "€240", timeLabel: "2.5 h ETA" },
-        { label: "Workshop intake hold", priceLabel: "€35", timeLabel: "Mock" },
-        { label: "Driver waiting stipend", priceLabel: "€15", timeLabel: "Short handoff" },
-      ],
-      bookingFields: [
-        {
-          key: "workshopContact",
-          label: "Workshop booking contact",
-          placeholder: "Desk phone or email",
-          required: true,
-          reason: "Ops confirms the workshop; agent does not book.",
-        },
-        {
-          key: "customerNotifyNote",
-          label: "Note for customer update (ops sends)",
-          placeholder: "Diagnosis hold / new ETA",
-          required: false,
-          reason: "Agent must not message the paying customer.",
-        },
-      ],
-    },
-  ]
+const TOW_BOOKING_DEALER: OpsBookingField[] = [
+  {
+    key: "towDispatchContact",
+    label: "Tow dispatch phone / case ref",
+    placeholder: "After you book the truck",
+    required: true,
+    reason: "Agent quotes only — ops places the booking and records the contact.",
+  },
+  {
+    key: "customerNotifyNote",
+    label: "Note for customer update (ops sends)",
+    placeholder: "Late delivery / recovery plan",
+    required: false,
+    reason: "Agent must not message the paying customer.",
+  },
+]
+
+const TOW_BOOKING_WORKSHOP: OpsBookingField[] = [
+  {
+    key: "workshopContact",
+    label: "Workshop booking contact",
+    placeholder: "Desk phone or email",
+    required: true,
+    reason: "Ops confirms the workshop; agent does not book.",
+  },
+  {
+    key: "customerNotifyNote",
+    label: "Note for customer update (ops sends)",
+    placeholder: "Diagnosis hold / new ETA",
+    required: false,
+    reason: "Agent must not message the paying customer.",
+  },
+]
+
+function tripToFerryOption(entry: TripCatalogEntry, orderRef: string): DecisionOption {
+  const withHotel = entry.kind === "ferry_hotel"
+  return {
+    id: entry.id,
+    lineName: entry.lineName,
+    title: entry.title,
+    summary: `${entry.summary} Order ${orderRef}.`,
+    priceEur: entry.priceEur,
+    priceLabel: entry.priceLabel,
+    etaHours: entry.etaHours,
+    timeLabel: entry.timeLabel,
+    delayLabel: entry.delayLabel,
+    opsNext: withHotel
+      ? `Open Book for ${entry.lineName}, then fill passenger/hotel contacts after Approve. Agent does not purchase.`
+      : `Open Book for ${entry.lineName}, fill passenger contacts after Approve. Agent does not purchase.`,
+    implications: `${entry.lineName} · ${entry.departureWindow} · ${entry.durationLabel}. bookUrl from search_trips only.`,
+    requiresApproval: withHotel
+      ? ["book_ferry", "book_hotel", "update_delivery_promise", "customer_message"]
+      : ["book_ferry", "update_delivery_promise", "customer_message"],
+    kind: withHotel ? "ferry_hotel" : "ferry",
+    components: entry.components,
+    bookingFields: withHotel ? FERRY_BOOKING_FIELDS : FERRY_BOOKING_FIELDS.filter((field) => !field.key.startsWith("hotel")),
+    bookUrl: entry.bookUrl,
+  }
 }
 
-function ferryOptions(orderRef: string): DecisionOption[] {
-  return [
-    {
-      id: "line-nordsea-evening",
-      lineName: "NordSea Link",
-      title: "Tonight 23:40 · Travemünde → Helsinki",
-      summary: `Overnight sold out on ${orderRef}. NordSea Link still has space on the late sailing; driver stays at Kajuta Inn before boarding (mock).`,
-      priceEur: 514,
-      priceLabel: "€514",
-      etaHours: 6,
-      timeLabel: "Sailing 23:40 · ~27 h sea",
-      delayLabel: "Delivery +1 day",
-      opsNext: "Approve NordSea Link, then fill passenger/hotel contacts. Ops books ferry + hotel (mock). Person updates the customer.",
-      implications: "Mock: NordSea Link cabin+vehicle €425 + Kajuta Inn €89. Fastest recovery among the three lines.",
-      requiresApproval: ["book_ferry", "book_hotel", "update_delivery_promise", "customer_message"],
-      kind: "ferry_hotel",
-      components: [
-        { label: "Ferry ticket (cabin + vehicle)", priceLabel: "€425", timeLabel: "23:40 tonight" },
-        { label: "Hotel · Kajuta Inn", priceLabel: "€89", timeLabel: "Check-in 20:00" },
-      ],
-      bookingFields: FERRY_BOOKING_FIELDS,
-    },
-    {
-      id: "line-balticgate-morning",
-      lineName: "Baltic Gate Ferries",
-      title: "Tomorrow 08:15 · Rostock → Vuosaari",
-      summary: `Baltic Gate morning freight sailing for ${orderRef}. Driver overnight at Terminal Lodge; boarding after rest.`,
-      priceEur: 455,
-      priceLabel: "€455",
-      etaHours: 14,
-      timeLabel: "Sailing 08:15 · ~26 h sea",
-      delayLabel: "Delivery +1 day",
-      opsNext: "Approve Baltic Gate, then fill contacts. Ops books ferry + lodge. Person updates the promise.",
-      implications: "Mock: Baltic Gate €310 + Terminal Lodge €145. Cheaper line, later departure.",
-      requiresApproval: ["book_ferry", "book_hotel", "update_delivery_promise", "customer_message"],
-      kind: "ferry_hotel",
-      components: [
-        { label: "Ferry ticket (cabin + vehicle)", priceLabel: "€310", timeLabel: "08:15 tomorrow" },
-        { label: "Hotel · Terminal Lodge", priceLabel: "€145", timeLabel: "Check-in 22:00" },
-      ],
-      bookingFields: FERRY_BOOKING_FIELDS,
-    },
-    {
-      id: "line-siljaroute-afternoon",
-      lineName: "Silja Route Express",
-      title: "Tomorrow 14:30 · Travemünde → Helsinki",
-      summary: `Silja Route Express afternoon sailing — more cabin availability for ${orderRef}, no hotel if the driver waits at the terminal rest area.`,
-      priceEur: 390,
-      priceLabel: "€390",
-      etaHours: 20,
-      timeLabel: "Sailing 14:30 · ~28 h sea",
-      delayLabel: "Delivery +2 days",
-      opsNext: "Approve Silja Route Express, fill passenger contacts. Ops books ferry only (mock). Person updates the customer.",
-      implications: "Mock: Silja Route Express cabin+vehicle €390. Lowest package price; longest wait before departure; hotel optional.",
-      requiresApproval: ["book_ferry", "update_delivery_promise", "customer_message"],
-      kind: "ferry",
-      components: [
-        { label: "Ferry ticket (cabin + vehicle)", priceLabel: "€390", timeLabel: "14:30 tomorrow" },
-        { label: "Hotel", priceLabel: "€0", timeLabel: "Not included" },
-      ],
-      bookingFields: FERRY_BOOKING_FIELDS.filter((field) => !field.key.startsWith("hotel")),
-    },
-  ]
+function tripToTowOption(entry: TripCatalogEntry, orderRef: string, vehicle: string, destinationCity: string): DecisionOption {
+  const dealer = /dealer|receiving/i.test(entry.title) || entry.id.includes("dealer")
+  return {
+    id: entry.id,
+    lineName: entry.lineName,
+    title: entry.title,
+    summary: dealer
+      ? `Tow the ${vehicle} toward ${destinationCity}. ${entry.summary} Order ${orderRef}.`
+      : `${entry.summary} Order ${orderRef}.`,
+    priceEur: entry.priceEur,
+    priceLabel: entry.priceLabel,
+    etaHours: entry.etaHours,
+    timeLabel: entry.timeLabel,
+    delayLabel: entry.delayLabel,
+    opsNext: dealer
+      ? "Call the customer (a person, not the agent), open Book for roadside info, then approve and fill dispatch contacts."
+      : "Confirm workshop preference with the customer (person), open Book, approve tow. Agent does not purchase.",
+    implications: dealer
+      ? "Higher tow cost, but the car goes straight to the right place. Customer message from a person."
+      : "Cheaper, faster pickup; journey paused until the car is roadworthy again.",
+    requiresApproval: ["book_tow", "update_delivery_promise", "customer_message"],
+    kind: "recovery",
+    components: entry.components,
+    bookingFields: dealer ? TOW_BOOKING_DEALER : TOW_BOOKING_WORKSHOP,
+    bookUrl: entry.bookUrl,
+  }
+}
+
+function roadsideOptions(
+  orderRef: string,
+  vehicle: string,
+  destinationCity: string,
+  trips?: TripCatalogEntry[],
+): DecisionOption[] {
+  const fromTool = (trips ?? []).filter((t) => t.kind === "tow").slice(0, 2)
+  const catalog = fromTool.length >= 2
+    ? fromTool
+    : searchTripCatalog({
+        origin: "Ingolstadt Germany A9",
+        destination: `${destinationCity} dealer workshop`,
+        prefer: "tow",
+      }).slice(0, 2)
+  return catalog.map((entry) => tripToTowOption(entry, orderRef, vehicle, destinationCity))
+}
+
+function ferryOptions(orderRef: string, trips?: TripCatalogEntry[]): DecisionOption[] {
+  const fromTool = (trips ?? []).filter((t) => t.kind === "ferry" || t.kind === "ferry_hotel")
+  const catalog = fromTool.length >= 2
+    ? fromTool.slice(0, 4)
+    : searchTripCatalog({
+        origin: "Travemünde Germany",
+        destination: "Helsinki Finland",
+        prefer: "ferry",
+      }).slice(0, 4)
+  return catalog.map((entry) => tripToFerryOption(entry, orderRef))
 }
 
 function readDeliveryPromise(loaded: NonNullable<Awaited<ReturnType<typeof loadOrder>>>): {
@@ -305,68 +286,67 @@ function buildMockDecision(input: {
   signal: string | null
   facts: AgentFact[]
   actions: ToolContext["actions"]
+  tripResults?: TripCatalogEntry[]
   loaded: NonNullable<Awaited<ReturnType<typeof loadOrder>>>
 }): AgentDecision {
   const isSafety = input.signal === "SAFETY_STOP" || input.facts.some((f) => f.label === "SAFETY_STOP")
   const isFerry = (input.signal ?? "").includes("FERRY") || input.facts.some((f) => f.label.includes("FERRY"))
 
+  const location = resolveCurrentLocation(input.loaded, null, input.facts)
+  if (location.known && !input.facts.some((f) => /^current location$/i.test(f.label))) {
+    input.facts.push({
+      label: "Current location",
+      value: location.label,
+      source: location.source,
+      sourceKind: "tool",
+    })
+  }
+
   if (isSafety) {
+    const options = roadsideOptions(input.reference, input.vehicle, input.destinationCity, input.tripResults)
     return {
       problem: "Red warning light — car stopped, driver is safe",
+      currentLocation: location.label,
       deliveryTiming: buildDeliveryTiming({ loaded: input.loaded, scenario: "safety" }),
       happened: `Driver stopped the ${input.vehicle} on ${input.reference} after a red warning light. They are safe at a motorway service area. The car should not be driven further.`,
       summary: "Choose a recovery path",
       facts: uniqFacts(input.facts),
       actions: input.actions,
-      options: roadsideOptions(input.reference, input.vehicle, input.destinationCity),
+      options,
       customerContact: "blocked",
-      recommendationId: "tow-dealer",
+      recommendationId: options[0]?.id ?? "trip-tow-dealer",
     }
   }
 
   if (isFerry) {
+    const options = ferryOptions(input.reference, input.tripResults)
     return {
       problem: "Overnight ferry sold out — need sailing + lodging plan",
+      currentLocation: location.label,
       deliveryTiming: buildDeliveryTiming({ loaded: input.loaded, scenario: "ferry" }),
-      happened: `Ferry risk on ${input.reference}: the planned overnight crossing is sold out. The driver needs a replacement sailing and, if the gap is overnight, a hotel. Quotes are mock only — no booking until ops approves and fills contacts.`,
+      happened: `Ferry risk on ${input.reference}: the planned overnight crossing is sold out. The driver needs a replacement sailing and, if the gap is overnight, a hotel. Options come from search_trips with real book links — ops opens Book; agent never purchases.`,
       summary: "Choose a ferry line",
       facts: uniqFacts(input.facts),
       actions: input.actions,
-      options: ferryOptions(input.reference),
+      options,
       customerContact: "blocked",
-      recommendationId: "line-nordsea-evening",
+      recommendationId: options[0]?.id ?? null,
     }
   }
 
+  const options = roadsideOptions(input.reference, input.vehicle, input.destinationCity, input.tripResults)
   return {
     problem: `Order ${input.reference} needs a person to decide`,
+    currentLocation: location.label,
     deliveryTiming: buildDeliveryTiming({ loaded: input.loaded, scenario: "generic" }),
     happened: `Something on ${input.reference} needs a person. The agent gathered what it could from the records and the driver.`,
     summary: "Choose an option",
     facts: uniqFacts(input.facts),
     actions: input.actions,
-    options: roadsideOptions(input.reference, input.vehicle, input.destinationCity),
+    options,
     customerContact: "blocked",
-    recommendationId: "tow-dealer",
+    recommendationId: options[0]?.id ?? "trip-tow-dealer",
   }
-}
-
-function pushFerryQuotes(ctx: ToolContext) {
-  const lines = [
-    "NordSea Link: tonight 23:40 Travemünde→Helsinki cabin+vehicle €425 + Kajuta Inn €89 = €514.",
-    "Baltic Gate Ferries: tomorrow 08:15 Rostock→Vuosaari cabin+vehicle €310 + Terminal Lodge €145 = €455.",
-    "Silja Route Express: tomorrow 14:30 Travemünde→Helsinki cabin+vehicle €390 (no hotel) = €390.",
-    "Agent does not fill passenger names, phones, or vendor contacts — ops completes after Approve.",
-  ]
-  for (const line of lines) {
-    ctx.facts.push({ label: "Travel quote", value: line, source: "Mock ferry/hotel pricing", sourceKind: "tool" })
-  }
-  ctx.actions.push({
-    tool: "quote_ferry_hotel",
-    summary: "Quoted three ferry lines with hotels where needed (mock; no booking)",
-    at: ctx.now,
-    detail: lines.join(" "),
-  })
 }
 
 async function runToolSequence(orderId: string): Promise<{
@@ -388,12 +368,24 @@ async function runToolSequence(orderId: string): Promise<{
 
   if (isSafety) {
     await executeTool(ctx, "ask_driver", { question: "Are you and the car in a safe place?" })
-    await executeTool(ctx, "ask_driver", { question: "Where exactly are you, and can you send a dashboard photo of the warning light?" })
+    await executeTool(ctx, "ask_driver", { question: "Where exactly are you right now?" })
+    await executeTool(ctx, "ask_driver", { question: "Can you send a dashboard photo of the warning light?" })
     await executeTool(ctx, "estimate_recovery", { destination: "dealer" })
     await executeTool(ctx, "estimate_recovery", { destination: "workshop" })
-  } else   if (isFerry) {
+    const origin = loaded.pickup ? `${loaded.pickup.city}, ${loaded.pickup.country}` : "Ingolstadt, Germany"
+    const destination = loaded.delivery ? `${loaded.delivery.city}, ${loaded.delivery.country}` : "Hamburg, Germany"
+    await executeTool(ctx, "search_trips", { origin, destination, prefer: "tow", vehicleNote: "Cannot be driven — needs tow" })
+  } else if (isFerry) {
     await executeTool(ctx, "ask_driver", { question: "Are you already at check-in, and what did the terminal say about the sailing?" })
-    pushFerryQuotes(ctx)
+    const origin = loaded.pickup ? `${loaded.pickup.city}, ${loaded.pickup.country}` : "Travemünde, Germany"
+    const destination = loaded.delivery ? `${loaded.delivery.city}, ${loaded.delivery.country}` : "Helsinki, Finland"
+    await executeTool(ctx, "search_trips", {
+      origin,
+      destination,
+      prefer: "ferry",
+      earliestDeparture: "tonight",
+      vehicleNote: "Vehicle + cabin preferred",
+    })
   } else {
     await executeTool(ctx, "ask_driver", { question: "Quick check — what is blocking you right now?" })
   }
@@ -425,6 +417,7 @@ export async function runMockAgent(orderId: string): Promise<AgentRunRecord> {
     signal: meta.signal,
     facts: ctx.facts,
     actions: ctx.actions,
+    tripResults: ctx.tripResults,
     loaded,
   })
   const now = new Date().toISOString()
@@ -512,6 +505,9 @@ function normalizeOption(raw: Partial<DecisionOption>, fallback: DecisionOption)
     lineName: raw.lineName ?? fallback.lineName,
     components: raw.components ?? fallback.components,
     bookingFields: raw.bookingFields ?? fallback.bookingFields,
+    bookUrl: typeof raw.bookUrl === "string" && raw.bookUrl.startsWith("http")
+      ? raw.bookUrl
+      : fallback.bookUrl,
   }
 }
 
@@ -526,6 +522,9 @@ function parseDecisionFromText(text: string, fallback: AgentDecision): AgentDeci
     )
     return {
       problem: String(parsed.problem ?? fallback.problem),
+      currentLocation: typeof (parsed as Partial<AgentDecision>).currentLocation === "string"
+        ? (parsed as Partial<AgentDecision>).currentLocation
+        : fallback.currentLocation,
       deliveryTiming: (parsed as Partial<AgentDecision>).deliveryTiming ?? fallback.deliveryTiming,
       happened: String(parsed.happened ?? fallback.happened),
       summary: String(parsed.summary ?? fallback.summary),
@@ -550,6 +549,8 @@ export function runNeedsPriceTimeRefresh(run: AgentRunRecord): boolean {
   if (decision.options.some((option) => option.id === "next-sailing" || option.id === "reroute-land" || option.id === "ferry-evening-hotel-a" || option.id === "ferry-morning-hotel-b")) return true
   if (decision.options.some((option) => (option.kind === "ferry_hotel" || option.kind === "ferry") && !option.lineName)) return true
   if (decision.options.some((option) => !(option.components?.length))) return true
+  if (decision.options.some((option) => (option.kind === "ferry_hotel" || option.kind === "ferry" || option.kind === "recovery") && !option.bookUrl)) return true
+  if (decision.options.some((option) => /NordSea Link|Baltic Gate|Silja Route Express/.test(option.lineName ?? ""))) return true
   const blob = [
     decision.problem,
     decision.summary,
@@ -569,9 +570,10 @@ export async function runLlmAgent(orderId: string): Promise<AgentRunRecord> {
     { role: "system", content: SYSTEM },
     {
       role: "user",
-      content: `Work order ${loaded.order.reference} (${orderId}). Gather facts with tools, then reply with JSON only:
-{"problem":"Overnight ferry sold out — need sailing + lodging plan","happened":"...","summary":"...","recommendationId":"option-id","options":[{"id":"...","lineName":"NordSea Link","title":"...","summary":"...","priceEur":514,"priceLabel":"€514","etaHours":6,"timeLabel":"Sailing 23:40","delayLabel":"Delivery +1 day","components":[{"label":"Ferry ticket","priceLabel":"€425","timeLabel":"..."},{"label":"Hotel","priceLabel":"€89","timeLabel":"..."}],"opsNext":"...","implications":"...","requiresApproval":["book_ferry","book_hotel"]}]}
-Include a short English "problem" line. Propose 2–3 options. Ferry cases: each option a different lineName (carrier). Every option MUST include priceEur, priceLabel, timeLabel, delayLabel, and components[] that break down the total. Price and time are primary. Write ops-facing English. Do not contact the customer.`,
+      content: `Work order ${loaded.order.reference} (${orderId}). Gather facts with tools, then reply with JSON only.
+For ferry / sailing cases you MUST call search_trips before proposing options. Copy bookUrl and lineName from tool results only — never invent URLs. Do not book.
+{"problem":"Overnight ferry sold out — need sailing + lodging plan","happened":"...","summary":"...","recommendationId":"option-id","options":[{"id":"trip-tallink-hel-tra","lineName":"Tallink Silja","title":"...","summary":"...","priceEur":540,"priceLabel":"€540","etaHours":8,"timeLabel":"...","delayLabel":"Delivery +1 day","bookUrl":"https://www.tallinksilja.com/","components":[{"label":"Ferry ticket","priceLabel":"€445","timeLabel":"..."},{"label":"Hotel","priceLabel":"€95","timeLabel":"..."}],"opsNext":"...","implications":"...","requiresApproval":["book_ferry","book_hotel"]}]}
+Include a short English "problem" line. Propose 2–4 options. Ferry cases: each option a different lineName (carrier) with bookUrl from search_trips. Every option MUST include priceEur, priceLabel, timeLabel, delayLabel, bookUrl, and components[] that break down the total. Price and time are primary. Write ops-facing English. Do not contact the customer.`,
     },
   ]
 
@@ -607,13 +609,29 @@ Include a short English "problem" line. Propose 2–3 options. Ferry cases: each
       signal: open?.signal ?? null,
       facts: ctx.facts,
       actions: ctx.actions,
+      tripResults: ctx.tripResults,
       loaded,
     })
     const decision = parseDecisionFromText(result.content ?? "", fallback)
+    // Prefer catalog bookUrls from search_trips when the model omits or invents links
+    if (ctx.tripResults?.length) {
+      const byId = new Map(ctx.tripResults.map((t) => [t.id, t]))
+      decision.options = decision.options.map((option) => {
+        const hit = byId.get(option.id) ?? ctx.tripResults?.find((t) => t.lineName === option.lineName)
+        if (!hit) return option
+        return {
+          ...option,
+          bookUrl: hit.bookUrl,
+          lineName: option.lineName ?? hit.lineName,
+          components: option.components?.length ? option.components : hit.components,
+        }
+      })
+    }
     decision.facts = uniqFacts(ctx.facts)
     decision.actions = ctx.actions
     decision.customerContact = "blocked"
     decision.deliveryTiming = decision.deliveryTiming ?? fallback.deliveryTiming
+    decision.currentLocation = decision.currentLocation ?? fallback.currentLocation ?? resolveCurrentLocation(loaded, null, ctx.facts).label
 
     const stamp = new Date().toISOString()
     return saveRun({
