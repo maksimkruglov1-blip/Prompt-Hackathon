@@ -3,7 +3,13 @@ import "server-only"
 import { loadOrder } from "@/lib/present/load"
 import { str } from "@/lib/present/bundle"
 import type { AgentAction, AgentFact } from "../types"
-import { searchTripCatalog, type TripCatalogEntry, type TripSearchArgs } from "./trip-catalog"
+import {
+  needsSeaCrossing,
+  searchTripCatalog,
+  shouldPreferTow,
+  type TripCatalogEntry,
+  type TripSearchArgs,
+} from "./trip-catalog"
 
 export type ToolContext = {
   orderId: string
@@ -232,10 +238,10 @@ export async function searchTrips(
   const destination =
     (args.destination?.trim() ||
       (loaded.delivery ? `${loaded.delivery.city}, ${loaded.delivery.country}` : "") ||
-      "Helsinki, Finland")
+      "destination")
 
   const preferRaw = (args.prefer ?? "any").toLowerCase()
-  const prefer: TripSearchArgs["prefer"] =
+  let prefer: TripSearchArgs["prefer"] =
     preferRaw === "ferry" || preferRaw === "tow" ? preferRaw : "any"
 
   const searchArgs: TripSearchArgs = {
@@ -244,6 +250,16 @@ export async function searchTrips(
     prefer,
     earliestDeparture: args.earliestDeparture,
     vehicleNote: args.vehicleNote,
+  }
+
+  // Guardrail: inland same-country (e.g. Munich → Hamburg) never returns Baltic ferries,
+  // even if the model asked for prefer=ferry.
+  if (shouldPreferTow(searchArgs)) {
+    prefer = "tow"
+    searchArgs.prefer = "tow"
+  } else if (prefer === "ferry" && !needsSeaCrossing(searchArgs)) {
+    prefer = "tow"
+    searchArgs.prefer = "tow"
   }
 
   const hits = searchTripCatalog(searchArgs)
@@ -297,15 +313,15 @@ export const TOOL_DEFINITIONS = [
   {
     name: "search_trips",
     description:
-      "Look up ferry / tow options from the car's current area to where it must go. Returns 2–4 options with line name, price estimate, duration, departure window, bookUrl, and price breakdown. Call this BEFORE proposing ferry options. Use only returned bookUrl values — never invent URLs. Does not book.",
+      "Look up ferry or tow options. Use prefer=ferry ONLY for Baltic sea crossings (e.g. Germany/Sweden ports → Finland/Estonia). Use prefer=tow for roadside stops and any inland same-country route (e.g. Munich → Hamburg). Never propose Tallink/Viking/Finnlines for inland Germany. Returns 2–4 options with lineName, price, time, bookUrl, and components. Use only returned bookUrl values — never invent URLs. Does not book.",
     parameters: {
       type: "object",
       properties: {
         origin: { type: "string", description: "Where the car is now (city/region). Defaults from the order pickup." },
         destination: { type: "string", description: "Where the car must go. Defaults from the order delivery." },
-        prefer: { type: "string", enum: ["ferry", "tow", "any"], description: "Prefer ferry, tow, or either." },
+        prefer: { type: "string", enum: ["ferry", "tow", "any"], description: "ferry = Baltic sea crossing only; tow = roadside/inland; any = catalog decides from corridor." },
         earliestDeparture: { type: "string", description: "Earliest departure window the driver can make (free text)." },
-        vehicleNote: { type: "string", description: "Vehicle / driver constraints (height, electric, cabin needed)." },
+        vehicleNote: { type: "string", description: "Vehicle / driver constraints (height, electric, cabin needed, cannot be driven)." },
       },
     },
   },

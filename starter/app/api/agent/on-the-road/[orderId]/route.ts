@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { buildDecisionCard } from "@/lib/agent/control-room"
+import { buildDecisionCard, invalidateAttentionQueueCache } from "@/lib/agent/control-room"
 import { runOnTheRoadAgent } from "@/lib/agent/on-the-road/loop"
 import { latestRunForOrder, updateRunDecision } from "@/lib/agent/store"
 import type { DecisionStatus } from "@/lib/agent/types"
@@ -16,6 +16,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     status?: DecisionStatus
     changeNote?: string
     opsGuidance?: string
+    /** Reviewed booking draft from the decision card (Approve may persist it). */
     opsDetails?: Record<string, string>
   }
 
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
           opsDetails: latest.opsDetails,
         })
         const rerun = await runOnTheRoadAgent(orderId, { opsGuidance: note })
+        invalidateAttentionQueueCache()
         const card = await buildDecisionCard(orderId)
         return NextResponse.json({
           run: rerun,
@@ -51,12 +53,19 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
         })
       }
 
+      const reviewedDraft =
+        status === "approved" && body.opsDetails && typeof body.opsDetails === "object"
+          ? body.opsDetails
+          : status === "approved"
+            ? null
+            : latest.opsDetails
       const updated = await updateRunDecision(latest.id, {
         status,
         selectedOptionId: status === "approved" ? (body.optionId ?? null) : null,
         changeNote: null,
-        opsDetails: status === "approved" ? null : latest.opsDetails,
+        opsDetails: reviewedDraft,
       })
+      invalidateAttentionQueueCache()
       const card = await buildDecisionCard(orderId)
       return NextResponse.json({ run: updated, card })
     }
@@ -86,6 +95,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     }
 
     const run = await runOnTheRoadAgent(orderId, { opsGuidance: body.opsGuidance ?? body.changeNote })
+    invalidateAttentionQueueCache()
     const card = await buildDecisionCard(orderId)
     return NextResponse.json({ run, card })
   } catch (error) {

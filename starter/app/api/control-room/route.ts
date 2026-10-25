@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server"
-import { buildAttentionQueue, ensureDemoSeed } from "@/lib/agent/control-room"
+import { buildAttentionQueue } from "@/lib/agent/control-room"
 import { humanizeApiError } from "@/lib/agent/ui-copy"
 
 export const runtime = "nodejs"
 
+/** Attention queue only — cheap reads, never runs the agent. */
 export async function GET() {
   try {
-    await ensureDemoSeed()
     const body = await buildAttentionQueue()
     return NextResponse.json(body)
   } catch (error) {

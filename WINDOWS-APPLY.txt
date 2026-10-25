@@ -1,0 +1,9 @@
+Expand over your Bahn clone (overwrite matching paths), then in starter: npm install && npm run dev.
+
+PowerShell:
+  $Repo = "$env:USERPROFILE\Documents\car-delivery-control-room"
+  $Zip  = "$env:USERPROFILE\Downloads\kontrollihuone-overlay.zip"
+  Expand-Archive -Path $Zip -DestinationPath $Repo -Force
+
+Includes background precompute (every attention case), P1–P3 urgency chips, booking draft, Approve + Re-run ghost style.
+Does NOT include .env, node_modules, .next, dataset, or attachments.

@@ -1,6 +1,6 @@
 import "server-only"
 
-import { desc, eq } from "drizzle-orm"
+import { desc, eq, inArray, sql } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { agentRuns } from "@/lib/schema"
 import type { AgentDecision, AgentRunRecord, DecisionStatus } from "./types"
@@ -29,9 +29,14 @@ export async function latestRunForOrder(orderId: string): Promise<AgentRunRecord
 export async function runsByOrderIds(orderIds: string[]): Promise<Map<string, AgentRunRecord>> {
   const map = new Map<string, AgentRunRecord>()
   if (orderIds.length === 0) return map
-  const rows = await db.select().from(agentRuns).orderBy(desc(agentRuns.updatedAt))
+  // Latest run per order — filter in SQL so we never scan the whole table for the queue.
+  const rows = await db
+    .select()
+    .from(agentRuns)
+    .where(inArray(agentRuns.orderId, orderIds))
+    .orderBy(desc(agentRuns.updatedAt))
   for (const row of rows) {
-    if (!orderIds.includes(row.orderId) || map.has(row.orderId)) continue
+    if (map.has(row.orderId)) continue
     map.set(row.orderId, rowToRecord(row))
   }
   return map
@@ -85,4 +90,16 @@ export async function updateRunDecision(
   }).where(eq(agentRuns.id, runId))
   const [row] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1)
   return row ? rowToRecord(row) : null
+}
+
+/** Remove decided agent runs so the attention queue shows open work again. */
+export async function clearDecidedAgentRuns(): Promise<void> {
+  await db.delete(agentRuns).where(
+    inArray(agentRuns.status, ["approved", "changed", "dismissed"]),
+  )
+}
+
+/** Wipe every agent run (demo reset). Pending proposals are reseeded by Control Room. */
+export async function truncateAgentRuns(): Promise<void> {
+  await db.execute(sql`TRUNCATE TABLE agent_runs`)
 }

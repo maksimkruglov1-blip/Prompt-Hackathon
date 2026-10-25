@@ -89,6 +89,18 @@ export function fmtRange(start: string | null | undefined, end: string | null | 
   return `${fromDay} ${fromClock} – ${toDay} ${toClock} ${name}`
 }
 
+/** Delivery promise/expected on the decision card: dates only, e.g. "27 Oct" or "27 Oct – 28 Oct". */
+export function fmtDayRange(start: string | null | undefined, end: string | null | undefined, zone?: string | null): string {
+  const from = parse(start)
+  if (!from) return ""
+  const tz = safeZone(zone)
+  const fromDay = parts(from, tz, { day: "numeric", month: "short" })
+  const to = parse(end)
+  if (!to) return fromDay
+  const toDay = parts(to, tz, { day: "numeric", month: "short" })
+  return fromDay === toDay ? fromDay : `${fromDay} – ${toDay}`
+}
+
 export type Relative = { text: string; past: boolean; minutes: number }
 
 /** Distance between a time and the snapshot: "in 2 d", "4 h ago", "now". */
