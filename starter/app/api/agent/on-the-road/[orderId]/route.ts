@@ -15,6 +15,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     optionId?: string
     status?: DecisionStatus
     changeNote?: string
+    opsGuidance?: string
     opsDetails?: Record<string, string>
   }
 
@@ -30,10 +31,30 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
         const option = latest.decision.options.find((o) => o.id === body.optionId)
         if (!option) return NextResponse.json({ error: "Unknown option" }, { status: 400 })
       }
+
+      // Change: record the note, then re-run the agent with that instruction as a new pending proposal.
+      if (status === "changed") {
+        const note = body.changeNote?.trim() || "Ops will handle differently"
+        await updateRunDecision(latest.id, {
+          status: "changed",
+          selectedOptionId: null,
+          changeNote: note,
+          opsDetails: latest.opsDetails,
+        })
+        const rerun = await runOnTheRoadAgent(orderId, { opsGuidance: note })
+        const card = await buildDecisionCard(orderId)
+        return NextResponse.json({
+          run: rerun,
+          card,
+          changeRerun: true,
+          previousChangeNote: note,
+        })
+      }
+
       const updated = await updateRunDecision(latest.id, {
         status,
         selectedOptionId: status === "approved" ? (body.optionId ?? null) : null,
-        changeNote: status === "changed" ? (body.changeNote?.trim() || "Ops will handle differently") : null,
+        changeNote: null,
         opsDetails: status === "approved" ? null : latest.opsDetails,
       })
       const card = await buildDecisionCard(orderId)
@@ -64,7 +85,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
       return NextResponse.json({ run: updated, card })
     }
 
-    const run = await runOnTheRoadAgent(orderId)
+    const run = await runOnTheRoadAgent(orderId, { opsGuidance: body.opsGuidance ?? body.changeNote })
     const card = await buildDecisionCard(orderId)
     return NextResponse.json({ run, card })
   } catch (error) {

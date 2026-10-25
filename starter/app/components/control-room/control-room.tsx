@@ -49,6 +49,9 @@ export function ControlRoom() {
   const [showChange, setShowChange] = useState(false)
   const [bookingForm, setBookingForm] = useState<Record<string, string>>({})
   const [bookingSaved, setBookingSaved] = useState(false)
+  const [showOtherOptions, setShowOtherOptions] = useState(false)
+  const [changeRerunNote, setChangeRerunNote] = useState<string | null>(null)
+  const [showTraceDetails, setShowTraceDetails] = useState(false)
 
   const loadQueue = useCallback(async () => {
     try {
@@ -82,6 +85,9 @@ export function ControlRoom() {
     setPickedOption(null)
     setBookingForm({})
     setBookingSaved(false)
+    setShowOtherOptions(false)
+    setChangeRerunNote(null)
+    setShowTraceDetails(false)
     fetch(`/api/control-room/${selectedId}`, { signal: controller.signal })
       .then(async (response) => {
         const data = await response.json() as DecisionResponse
@@ -148,16 +154,30 @@ export function ControlRoom() {
           changeNote: changeNote || undefined,
         }),
       })
-      const data = await response.json() as { card?: DecisionResponse; error?: string }
+      const data = await response.json() as {
+        card?: DecisionResponse
+        error?: string
+        changeRerun?: boolean
+        previousChangeNote?: string
+      }
       if (!response.ok) throw new Error(data.error || "Could not save the decision")
       if (data.card) {
         setDecision(data.card)
         setBookingForm(data.card.run?.opsDetails ?? {})
         setBookingSaved(false)
+        setPickedOption(
+          data.card.run?.decision.recommendationId
+          ?? data.card.run?.decision.options[0]?.id
+          ?? null,
+        )
+        setShowOtherOptions(false)
       }
       setShowChange(false)
+      if (status === "changed" && data.changeRerun) {
+        setChangeRerunNote(data.previousChangeNote ?? changeNote)
+        setChangeNote("")
+      }
       await loadQueue()
-      // Sticky footer can hide the booking block — bring ops contacts into view after Approve
       if (status === "approved") {
         requestAnimationFrame(() => {
           document.getElementById("cr-booking-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" })
@@ -200,8 +220,37 @@ export function ControlRoom() {
     ? run.decision.options.find((option) => option.id === run.selectedOptionId) ?? null
     : null
   const bookingFields = chosenOption?.bookingFields ?? []
-  const topFacts = (run?.decision.facts ?? []).slice(0, 6)
+  const topFacts = (run?.decision.facts ?? []).slice(0, 5)
   const isTowCase = chosenOption?.kind === "recovery" || run?.decision.options.some((o) => o.kind === "recovery")
+  const sortedOptions = (() => {
+    const options = run?.decision.options ?? []
+    const recId = run?.decision.recommendationId
+    if (!recId) return options
+    const rec = options.find((o) => o.id === recId)
+    if (!rec) return options
+    return [rec, ...options.filter((o) => o.id !== recId)]
+  })()
+  const primaryOption = sortedOptions[0] ?? null
+  const altOption = sortedOptions[1] ?? null
+  const moreOptions = sortedOptions.slice(2)
+  const agentActions = run?.decision.actions ?? run?.toolTrace ?? []
+
+  function formatActionTime(iso: string): string {
+    try {
+      return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    } catch {
+      return ""
+    }
+  }
+
+  function toolLabel(tool: string): string {
+    if (tool === "ask_driver") return "Asked driver"
+    if (tool === "lookup_order") return "Looked up order"
+    if (tool === "gather_facts") return "Gathered facts"
+    if (tool === "estimate_recovery") return "Estimated tow"
+    if (tool === "search_trips") return "Searched trips"
+    return tool.replaceAll("_", " ")
+  }
 
   return (
     <AppFrame section="board" board snapshotAt={queue?.snapshotAt ?? null}>
@@ -236,23 +285,33 @@ export function ControlRoom() {
               </ul>
             )}
             {queue && queue.items.length === 0 && (
-              <p className="cr-empty">No orders waiting on a person. Quiet shift.</p>
+              <p className="cr-empty">No orders waiting on a person. Quiet shift — check Inbox if something feels missing.</p>
             )}
             {queue && queue.items.length > 0 && (
               <ul className="cr-queue-list">
-                {queue.items.map((item) => {
+                {queue.items.map((item, index) => {
                   const active = item.orderId === selectedId
+                  const prev = queue.items[index - 1]
+                  const showTier = !prev || prev.urgency !== item.urgency
                   return (
                     <li key={item.orderId}>
+                      {showTier && (
+                        <p className={`cr-queue-tier urgency-${item.urgency}`}>
+                          {item.urgencyLabel}
+                          <span className="num">
+                            {queue.items.filter((row) => row.urgency === item.urgency).length}
+                          </span>
+                        </p>
+                      )}
                       <button
                         type="button"
-                        className={`cr-qitem tone-${item.reasonTone}${active ? " active" : ""}`}
+                        className={`cr-qitem tone-${item.reasonTone} urgency-${item.urgency}${active ? " active" : ""}`}
                         onClick={() => setSelectedId(item.orderId)}
                         aria-current={active ? "true" : undefined}
                       >
                         <div className="cr-qtop">
                           <span className="cr-qvehicle">{item.vehicle}</span>
-                          <span className="cr-qwait num">{item.waitingLabel}</span>
+                          <span className="cr-qwait num" title="Time since raised">{item.waitingLabel}</span>
                         </div>
                         <div className="cr-qmeta">
                           <span className="mono">{item.reference}</span>
@@ -373,6 +432,47 @@ export function ControlRoom() {
                       </section>
                     )}
 
+                    {changeRerunNote && pending && (
+                      <p className="cr-result warn" role="status">
+                        New proposal after your Change note: “{changeRerunNote}”
+                      </p>
+                    )}
+
+                    {agentActions.length > 0 && (
+                      <section className="cr-trace" aria-label="What the agent did">
+                        <h3>What the agent did</h3>
+                        <p className="cr-trace-compact">
+                          {agentActions.slice(0, 6).map((action, index) => (
+                            <span key={`${action.tool}-${index}`}>
+                              {index > 0 && <span className="cr-trace-sep"> · </span>}
+                              <span className="cr-trace-step">{toolLabel(action.tool)}</span>
+                              {formatActionTime(action.at) && (
+                                <span className="cr-trace-time num"> {formatActionTime(action.at)}</span>
+                              )}
+                            </span>
+                          ))}
+                        </p>
+                        <button
+                          type="button"
+                          className="cr-ghost cr-trace-toggle"
+                          onClick={() => setShowTraceDetails((v) => !v)}
+                        >
+                          {showTraceDetails ? "Hide steps" : "Show steps"}
+                        </button>
+                        {showTraceDetails && (
+                          <ol className="cr-trace-list">
+                            {agentActions.slice(0, 12).map((action, index) => (
+                              <li key={`${action.tool}-detail-${index}`}>
+                                <span className="cr-trace-time num">{formatActionTime(action.at)}</span>
+                                <span className="cr-trace-step">{toolLabel(action.tool)}</span>
+                                <span className="cr-trace-detail">{action.summary}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </section>
+                    )}
+
                     <section className="cr-block cr-hero-choice">
                       <div className="cr-choice-head">
                         <h3>Choose an option</h3>
@@ -380,10 +480,10 @@ export function ControlRoom() {
                           <p className="cr-choice-sub">{run.decision.summary}</p>
                         )}
                       </div>
-                      <div className="cr-options" role="radiogroup" aria-label="Proposed options">
-                        {run.decision.options.map((option) => {
+                      <div className="cr-options stacked" role="radiogroup" aria-label="Proposed options">
+                        {primaryOption && (() => {
+                          const option = primaryOption
                           const selected = pickedOption === option.id
-                          const recommended = run.decision.recommendationId === option.id
                           const selectable = pending && !busy
                           return (
                             <div
@@ -392,7 +492,7 @@ export function ControlRoom() {
                               tabIndex={selectable ? 0 : -1}
                               aria-checked={selected}
                               aria-disabled={!selectable}
-                              className={`cr-option${selected ? " selected" : ""}${!selectable ? " disabled" : ""}`}
+                              className={`cr-option primary${selected ? " selected" : ""}${!selectable ? " disabled" : ""}`}
                               onClick={() => { if (selectable) setPickedOption(option.id) }}
                               onKeyDown={(event) => {
                                 if (!selectable) return
@@ -402,20 +502,19 @@ export function ControlRoom() {
                                 }
                               }}
                             >
-                              {option.lineName && (
-                                <p className="cr-line-name">{option.lineName}</p>
-                              )}
                               <div className="cr-option-top">
-                                <strong>{option.title}</strong>
-                                {recommended && <span className="cr-pill accent">Recommended</span>}
-                              </div>
-                              {(option.kind === "ferry_hotel" || option.kind === "ferry" || option.kind === "hotel") && (
-                                <div className="cr-kind-row">
-                                  {(option.kind === "ferry_hotel" || option.kind === "ferry") && <span className="cr-pill">Ferry</span>}
-                                  {(option.kind === "ferry_hotel" || option.kind === "hotel") && <span className="cr-pill">Hotel</span>}
+                                <div>
+                                  {option.lineName && <p className="cr-line-name">{option.lineName}</p>}
+                                  <strong>{option.title}</strong>
                                 </div>
-                              )}
-                              <div className="cr-metrics" aria-label="Price and time">
+                                <span className="cr-pill accent">Recommended</span>
+                              </div>
+                              <div className="cr-kind-row">
+                                {(option.kind === "ferry_hotel" || option.kind === "ferry") && <span className="cr-pill">Ferry</span>}
+                                {(option.kind === "ferry_hotel" || option.kind === "hotel") && <span className="cr-pill">Hotel</span>}
+                                {option.kind === "recovery" && <span className="cr-pill">Tow</span>}
+                              </div>
+                              <div className="cr-metrics primary-metrics" aria-label="Price and time">
                                 <div className="cr-metric">
                                   <span className="cr-metric-label">Price</span>
                                   <span className="cr-metric-value price">{option.priceLabel ?? `€${option.priceEur ?? "—"}`}</span>
@@ -432,54 +531,144 @@ export function ControlRoom() {
                                   <ul className="cr-components">
                                     {option.components.map((part) => (
                                       <li key={part.label}>
-                                        <span>{part.label}</span>
+                                        <span title={part.label}>{part.label}</span>
                                         <span className="num">{part.priceLabel}</span>
-                                        <span className="cr-comp-time">{part.timeLabel}</span>
+                                        <span className="cr-comp-time" title={part.timeLabel}>{part.timeLabel}</span>
                                       </li>
                                     ))}
                                     <li className="cr-components-total">
                                       <span>Total</span>
                                       <span className="num">{option.priceLabel}</span>
-                                      <span />
                                     </li>
                                   </ul>
                                 </div>
                               )}
                               <p className="cr-option-summary">{option.summary}</p>
-                              <p className="cr-ops"><b>Ops:</b> {option.opsNext}</p>
                               {option.bookUrl && (
-                                <div
-                                  className="cr-book-row"
-                                  onClick={(event) => event.stopPropagation()}
-                                  onMouseDown={(event) => event.stopPropagation()}
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onKeyDown={(event) => event.stopPropagation()}
-                                >
+                                <div className="cr-book-row" onClick={(event) => event.stopPropagation()}>
                                   <a
                                     className="cr-book"
                                     data-testid={`book-${option.id}`}
                                     href={option.bookUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    aria-disabled={undefined}
                                     onClick={(event) => event.stopPropagation()}
-                                    onMouseDown={(event) => event.stopPropagation()}
-                                    onPointerDown={(event) => event.stopPropagation()}
                                   >
                                     Book
                                   </a>
-                                  <span className="cr-book-hint">
-                                    {option.kind === "recovery"
-                                      ? "ADAC roadside-assistance info — you book the tow; agent never does"
-                                      : "Opens carrier site — you book; agent never does"}
-                                  </span>
-                                  <span className="cr-book-url">{option.bookUrl.replace(/^https?:\/\//, "")}</span>
                                 </div>
                               )}
                             </div>
                           )
-                        })}
+                        })()}
+
+                        {altOption && (() => {
+                          const option = altOption
+                          const selected = pickedOption === option.id
+                          const selectable = pending && !busy
+                          return (
+                            <div
+                              key={option.id}
+                              role="radio"
+                              tabIndex={selectable ? 0 : -1}
+                              aria-checked={selected}
+                              aria-disabled={!selectable}
+                              className={`cr-option compact${selected ? " selected" : ""}${!selectable ? " disabled" : ""}`}
+                              onClick={() => { if (selectable) setPickedOption(option.id) }}
+                              onKeyDown={(event) => {
+                                if (!selectable) return
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault()
+                                  setPickedOption(option.id)
+                                }
+                              }}
+                            >
+                              <div className="cr-option-top">
+                                <div>
+                                  {option.lineName && <p className="cr-line-name">{option.lineName}</p>}
+                                  <strong>{option.title}</strong>
+                                </div>
+                                <span className="cr-pill">Alternative</span>
+                              </div>
+                              <div className="cr-metrics" aria-label="Price and time">
+                                <div className="cr-metric">
+                                  <span className="cr-metric-label">Price</span>
+                                  <span className="cr-metric-value price">{option.priceLabel}</span>
+                                </div>
+                                <div className="cr-metric">
+                                  <span className="cr-metric-label">Time</span>
+                                  <span className="cr-metric-value time">{option.timeLabel}</span>
+                                </div>
+                              </div>
+                              <p className="cr-delay">{option.delayLabel}</p>
+                              {option.bookUrl && (
+                                <div className="cr-book-row" onClick={(event) => event.stopPropagation()}>
+                                  <a
+                                    className="cr-book"
+                                    data-testid={`book-${option.id}`}
+                                    href={option.bookUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    Book
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
+
+                      {moreOptions.length > 0 && (
+                        <div className="cr-other-options">
+                          <button type="button" className="cr-ghost" onClick={() => setShowOtherOptions((v) => !v)}>
+                            {showOtherOptions ? "Hide" : "Other options"} ({moreOptions.length})
+                          </button>
+                          {showOtherOptions && (
+                            <div className="cr-options compact-list" role="radiogroup" aria-label="Other options">
+                              {moreOptions.map((option) => {
+                                const selected = pickedOption === option.id
+                                const selectable = pending && !busy
+                                return (
+                                  <div
+                                    key={option.id}
+                                    role="radio"
+                                    tabIndex={selectable ? 0 : -1}
+                                    aria-checked={selected}
+                                    className={`cr-option compact${selected ? " selected" : ""}${!selectable ? " disabled" : ""}`}
+                                    onClick={() => { if (selectable) setPickedOption(option.id) }}
+                                  >
+                                    <div className="cr-option-top">
+                                      <strong>{option.lineName ? `${option.lineName} · ${option.title}` : option.title}</strong>
+                                    </div>
+                                    <div className="cr-metrics">
+                                      <div className="cr-metric">
+                                        <span className="cr-metric-label">Price</span>
+                                        <span className="cr-metric-value price">{option.priceLabel}</span>
+                                      </div>
+                                      <div className="cr-metric">
+                                        <span className="cr-metric-label">Time</span>
+                                        <span className="cr-metric-value time">{option.timeLabel}</span>
+                                      </div>
+                                    </div>
+                                    {option.bookUrl && (
+                                      <a className="cr-book" href={option.bookUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                        Book
+                                      </a>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <p className="cr-ops-note">
+                        <b>Ops:</b> Open <b>Book</b> on the option you choose, complete the purchase yourself, then <b>Approve</b> and fill contacts.
+                        The agent never books and never contacts the paying customer.
+                      </p>
                     </section>
 
                     <footer className="cr-approve">
@@ -488,7 +677,7 @@ export function ControlRoom() {
                           Approved: {chosenOption.title} · {chosenOption.priceLabel} · {chosenOption.timeLabel}
                         </p>
                       )}
-                      {run.status === "changed" && (
+                      {run.status === "changed" && !pending && (
                         <p className="cr-result warn">Changed by ops{run.changeNote ? ` — ${run.changeNote}` : ""}</p>
                       )}
                       {pending && (
@@ -509,17 +698,18 @@ export function ControlRoom() {
                           </div>
                           {showChange && (
                             <div className="cr-change">
-                              <label htmlFor="change-note">How will you handle this?</label>
+                              <label htmlFor="change-note">What should the agent try instead?</label>
                               <textarea
                                 id="change-note"
                                 rows={3}
                                 value={changeNote}
                                 onChange={(event) => setChangeNote(event.target.value)}
-                                placeholder="e.g. Customer arranges their own tow; wait for their instruction."
+                                placeholder="e.g. Prefer cheapest ferry / tow to workshop / customer arranges own recovery."
                               />
-                              <button type="button" className="cr-primary" disabled={busy} onClick={() => void decide("changed")}>
-                                Save change
+                              <button type="button" className="cr-primary" disabled={busy || !changeNote.trim()} onClick={() => void decide("changed")}>
+                                Re-run with this note
                               </button>
+                              <p className="cr-change-hint">Saves your note, re-runs the agent, and shows a new pending proposal.</p>
                             </div>
                           )}
                         </>
@@ -587,13 +777,12 @@ export function ControlRoom() {
                     )}
 
                     <details className="cr-secondary">
-                      <summary>What happened and agent work</summary>
+                      <summary>Full narrative and all facts</summary>
                       <div className="cr-secondary-body">
                         <section className="cr-block">
                           <h3>What happened</h3>
                           <p className="cr-lead">{run.decision.happened}</p>
                         </section>
-
                         <section className="cr-block">
                           <h3>All facts with sources</h3>
                           <ul className="cr-facts">
@@ -609,18 +798,6 @@ export function ControlRoom() {
                               </li>
                             ))}
                           </ul>
-                        </section>
-
-                        <section className="cr-block">
-                          <h3>What the agent did</h3>
-                          <ol className="cr-actions">
-                            {run.decision.actions.map((action, index) => (
-                              <li key={`${action.tool}-${index}`}>
-                                <span className="cr-tool mono">{action.tool}</span>
-                                <span>{action.summary}</span>
-                              </li>
-                            ))}
-                          </ol>
                           <p className="cr-note">Customer contact blocked · booking / cost / date / customer message need approval</p>
                         </section>
                       </div>

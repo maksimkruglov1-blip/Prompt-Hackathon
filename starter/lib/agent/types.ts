@@ -117,4 +117,7 @@ export type QueueItem = {
   agentStatus: "idle" | "ready" | "pending" | "approved" | "changed"
   signal: string | null
   attentionShort: string
+  /** Ops queue tier for grouping / sort. */
+  urgency: "critical" | "urgent" | "watch"
+  urgencyLabel: string
 }

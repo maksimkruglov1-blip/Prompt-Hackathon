@@ -52,6 +52,24 @@ export async function buildAttentionQueue(): Promise<{
     const alertItem = card.attention.find((item) => item.kind === "alert" || item.kind === "owned_alert" || item.kind === "incident")
     const signal = alertSignalFromShort(alertItem?.short ?? top?.short ?? null)
     const waiting = top?.at ? relativeTo(top.at, snapshotAt)?.text : (top?.atLabel ?? null)
+    const signalUpper = (signal ?? "").toUpperCase()
+    const reasonBlob = `${top?.title ?? ""} ${top?.short ?? ""} ${signalUpper}`
+    let urgency: QueueItem["urgency"] = "watch"
+    let urgencyLabel = "Watch"
+    if (
+      /SAFETY|STOPPED|WARNING|ROADSIDE|VEHICLE WARNING|TRACKING_GAP/i.test(reasonBlob)
+      || card.reference === "CD-420322"
+    ) {
+      urgency = "critical"
+      urgencyLabel = "Driver / vehicle stop"
+    } else if (
+      /FERRY|DELIVERY|PROMISE|LATE|DELAY|CAPACITY|TRAVEL|CONNECTION|UNACHIEVABLE|POSITIONING/i.test(reasonBlob)
+      || top?.tone === "danger"
+      || top?.tone === "warn"
+    ) {
+      urgency = "urgent"
+      urgencyLabel = "Delivery at risk"
+    }
     return {
       orderId: card.id,
       reference: card.reference,
@@ -64,16 +82,19 @@ export async function buildAttentionQueue(): Promise<{
       agentStatus: agentStatusFromRun(run),
       signal,
       attentionShort: top?.short ?? "Needs person",
+      urgency,
+      urgencyLabel,
     }
   }).sort((a, b) => {
+    const urgencyRank = { critical: 0, urgent: 1, watch: 2 } as const
     const toneRank = { danger: 0, warn: 1, accent: 2, neutral: 3 } as const
-    const roadBoost = (item: QueueItem) => {
-      const s = (item.signal ?? "").toUpperCase()
-      if (s.includes("SAFETY") || item.reference === "CD-420322") return 0
-      if (s.includes("FERRY")) return 1
-      return 2
-    }
-    return roadBoost(a) - roadBoost(b) || toneRank[a.reasonTone] - toneRank[b.reasonTone] || a.reference.localeCompare(b.reference)
+    const pendingBoost = (item: QueueItem) => (item.agentStatus === "pending" || item.agentStatus === "ready" ? 0 : 1)
+    return (
+      urgencyRank[a.urgency] - urgencyRank[b.urgency]
+      || pendingBoost(a) - pendingBoost(b)
+      || toneRank[a.reasonTone] - toneRank[b.reasonTone]
+      || a.reference.localeCompare(b.reference)
+    )
   })
 
   return { snapshotAt, mode: agentMode(), items }

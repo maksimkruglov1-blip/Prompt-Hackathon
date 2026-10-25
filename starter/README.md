@@ -21,10 +21,13 @@ Optional OpenRouter / OpenAI (never commit keys) — see `.env.example` and root
 Participant additions:
 
 - `lib/agent/` — on-the-road tools (`search_trips` + catalog), mock/LLM loop, control-room projections
-- Decision card: facts with sources, current location, Book links, Next for ops after Approve
+- Decision card: recommended option first, compact alternative, facts with sources, current location, Book links, agent timeline, Change re-run, Next for ops after Approve
+- Attention queue sorted by urgency (driver stop → delivery at risk → watch)
 - `app/api/control-room`, `app/api/agent/on-the-road`
 - `agent_runs` table (no FK into seed data)
 - Demos: ferry `ord-00299` / `CD-420299`, Bentley roadside `ord-00322` / `CD-420322`
+
+See root `README.md` for the full clone path and **How we built this with AI**.
 
 ---
 

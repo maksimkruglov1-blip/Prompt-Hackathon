@@ -83,7 +83,20 @@ This cloud branch tracks Origin. **You** push to your public GitHub fork ([Promp
 - `dataset/`, `attachments/` — fictional orders and files
 - `starter/` — Next.js app (this solution)
 
+## How we built this with AI
+
+Short hand-in note (edit freely):
+
+**What we asked agents for.** Attention-queue Control Room + one on-the-road agent (ferry + roadside), English UI, approvals before booking, never contact the paying customer, synthetic data, `search_trips` with real Book URLs, facts with sources, current location under Problem.
+
+**What we checked.** CD-420299 and CD-420322 open → Book → Approve; Change with a note re-runs the agent; queue urgency with many items; narrow viewport; mock path without API keys; README clone path from repo root into `starter/`.
+
+**What we threw away.** Lane board as the primary UX; Finnish product UI; auto-booking; raw SQL/API errors in the UI; a sticky approve footer that blocked Book clicks; applying a `git apply` patch path that failed on Windows (switched to overlay zip).
+
+**Where we did not take the first answer.** Price and Time first on options (then kept on one line); problem line restored above the compare; current-location row under Problem; fact sources made visible; recommended option primary with one alternative (not a flat multi-card wall).
+
 ## Notes
 
 - `npm run db:seed` replaces challenge snapshot data; participant table `agent_runs` has no FK into seed tables so reseeding stays safe.
+- Judge-gap UI refresh (recommended option, queue urgency, Change re-run, shortened time labels) lives in `agent_runs` + app code — **no DB re-seed required** for an existing local DB; re-run the agent or reload Control Room so demo seeds refresh. Fresh clones still need `db:push` / `db:seed` / `attachments:seed` as above.
 - All names and messages are fictional.
