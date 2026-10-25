@@ -75,9 +75,7 @@ Pitch: Bahn has no on-the-road agent yet — this is that layer.
 
 A 2–3 minute screen recording with voice is part of the hand-in. It shows the queue, `CD-420299` (timeline, Finnlines, booking draft, Approve), `CD-420322` (tow), and how we used coding agents.
 
-**Video:** https://youtu.be/REPLACE_WITH_LINK
 
-Replace that link with the public URL before you submit. The form takes the same link.
 
 ## How we built this with AI
 
